@@ -3,12 +3,76 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="A relaxing top-down game about travelling the UK canals on a narrowboat." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%235b95ab'/%3E%3Cpath d='M5 13H22Q28 13 30 16Q28 19 22 19H5Z' fill='%231f2629'/%3E%3Crect x='8' y='14' width='14' height='4' rx='1' fill='%232f6b4a'/%3E%3C/svg%3E" />
     <title>Towpath</title>
   </head>
   <body>
-    <main id="app">
-      <h1>Towpath</h1>
-      <p>A relaxing top-down game about travelling the UK canals on a narrowboat. Coming soon.</p>
+    <main id="game" class="game">
+      <div class="hud hud-top">
+        <section class="panel status-panel" aria-label="What's happening">
+          <p class="wordmark">Towpath</p>
+          <p class="status" id="status" role="status" aria-live="polite"></p>
+        </section>
+        <div class="hud-actions">
+          <span class="rate" id="rate" hidden></span>
+          <button type="button" class="map-button" id="map-button" aria-pressed="false" aria-keyshortcuts="M">
+            <span id="map-button-text">Map</span> <kbd>M</kbd>
+          </button>
+        </div>
+      </div>
+
+      <div class="hud hud-bottom">
+        <section class="panel helm-panel" id="helm-panel" aria-label="Steering">
+          <p class="helm-who" id="helm-who">The boat is steering itself</p>
+          <p class="keys">
+            <span><kbd aria-label="Left arrow">←</kbd><kbd aria-label="Right arrow">→</kbd> steer</span>
+            <span><kbd aria-label="Up arrow">↑</kbd><kbd aria-label="Down arrow">↓</kbd> speed</span>
+          </p>
+        </section>
+        <section class="panel trip-panel" aria-label="The trip">
+          <p class="speed" id="speed">0.0 mph</p>
+          <p class="next" id="next"></p>
+        </section>
+      </div>
+
+      <p class="toast" id="toast" role="status" aria-live="polite"></p>
+
+      <aside class="panel map-key" id="map-key" aria-label="Map key" hidden>
+        <h2>Map key</h2>
+        <ul>
+          <li><svg viewBox="-24 -24 48 48" aria-hidden="true"><path d="M-12 -18L8 0L-12 18" fill="none" stroke="#2b3a3f" stroke-width="7" stroke-linejoin="round" /></svg>Lock, pointing uphill</li>
+          <li><svg viewBox="-24 -24 48 48" aria-hidden="true"><path d="M-8 -20V20M8 -20V20" stroke="#2b3a3f" stroke-width="6" /></svg>Bridge</li>
+          <li><svg viewBox="-24 -24 48 48" aria-hidden="true"><path d="M-22 0H22" stroke="#8a7a5a" stroke-width="5" stroke-dasharray="9 6" /></svg>Towpath</li>
+          <li><svg viewBox="-24 -24 48 48" aria-hidden="true"><path d="M-20 0H20" stroke="#3f8a4f" stroke-width="10" /></svg>Moored boats</li>
+          <li><svg viewBox="-24 -24 48 48" aria-hidden="true"><circle r="12" fill="#a8402f" stroke="#fffaf0" stroke-width="4" /></svg>Pub</li>
+          <li><svg viewBox="-24 -24 48 48" aria-hidden="true"><path d="M-22 0H22" stroke="#c0392b" stroke-width="5" stroke-dasharray="8 6" /></svg>Today's route</li>
+        </ul>
+      </aside>
+
+      <section class="card-screen" id="start-card" aria-labelledby="start-title">
+        <div class="card">
+          <h1 id="start-title">Towpath</h1>
+          <p class="tagline">Life at four miles an hour</p>
+          <p id="start-text"></p>
+          <ul class="controls">
+            <li><span><kbd>←</kbd><kbd>→</kbd></span> Take the tiller and steer. Let go, and the boat carries on by itself.</li>
+            <li><span><kbd>↑</kbd><kbd>↓</kbd></span> Speed up or slow down while you steer.</li>
+            <li><span><kbd>M</kbd></span> Open the map, and press it again to come back.</li>
+          </ul>
+          <button type="button" class="primary" id="cast-off">Cast off</button>
+        </div>
+      </section>
+
+      <section class="card-screen" id="end-card" aria-labelledby="end-title" hidden>
+        <div class="card">
+          <h2 id="end-title"></h2>
+          <p id="end-text"></p>
+          <button type="button" class="primary" id="again"></button>
+        </div>
+      </section>
+
+      <noscript><p class="noscript">Towpath needs JavaScript to run.</p></noscript>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>
