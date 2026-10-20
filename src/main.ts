@@ -49,6 +49,8 @@ const hud = new Hud(document, {
   onCastOff: () => handle(castOff(trip)),
   onStartAgain: () => {
     trip = newTrip(plan);
+    hintedAt = -Infinity;
+    camera.snap();
     handle(castOff(trip));
   },
   onToggleMap: () => toggleMap(),
@@ -116,5 +118,8 @@ let hiddenTimer = 0;
 document.addEventListener('visibilitychange', () => {
   window.clearInterval(hiddenTimer);
   if (document.hidden) hiddenTimer = window.setInterval(() => simulate(performance.now()), 1000);
-  else lastFrame = null;
+  else {
+    lastFrame = null;
+    camera.snap();
+  }
 });
