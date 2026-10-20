@@ -15,8 +15,11 @@ runs:
       continue-on-error: true
       with:
         mode: firewall
+    # The fallback installs from sfw/package-lock.json, so the registry copy is
+    # checked against a committed integrity hash. The install step below looks
+    # for it there when the Socket action left no sfw on the PATH.
     - name: Install Socket Firewall from the npm registry
-      run: command -v sfw > /dev/null || npm install --global sfw@2.0.6
+      run: command -v sfw > /dev/null || (cd "$GITHUB_ACTION_PATH/sfw" && npm ci --ignore-scripts)
       shell: bash
     # sfw proxies the install and calls Socket's API as it goes, so a dropped
     # connection kills the install (exit 137). Retry that and only that: the
@@ -24,6 +27,7 @@ runs:
     # fatal, so a blocked dependency can never be retried into a pass.
     - name: Install dependencies through Socket Firewall
       run: |
+        PATH="$PATH:$GITHUB_ACTION_PATH/sfw/node_modules/.bin"
         for attempt in 1 2 3; do
           status=0
           sfw npm ci || status=$?
