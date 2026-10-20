@@ -41,3 +41,7 @@ CI runs the same four checks on every pull request and every push to `main`, and
 ## Reporting problems
 
 Open an issue for bugs and ideas. For a security problem, see [SECURITY.md](SECURITY.md) and report it privately instead.
+
+## Licence
+
+MIT, see [LICENSE](LICENSE).
