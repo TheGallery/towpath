@@ -1,0 +1,8 @@
+{
+  "name": "setup-socket-firewall",
+  "private": true,
+  "description": "Pins the Socket Firewall fallback install to a lockfile.",
+  "dependencies": {
+    "sfw": "2.0.6"
+  }
+}

@@ -1,0 +1,40 @@
+name: Set up
+description: Install Node and the dependencies through Socket Firewall.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version-file: .nvmrc
+        # Every install goes through Socket Firewall, so no dependency cache.
+        package-manager-cache: false
+    # Socket's download site fails often enough to break a job on its own, so a
+    # failure there falls back to the npm registry, which serves the same tool.
+    # If both fail, sfw is missing and the install below fails, as it should.
+    - uses: socketdev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
+      continue-on-error: true
+      with:
+        mode: firewall
+    # The fallback installs from sfw/package-lock.json, so the registry copy is
+    # checked against a committed integrity hash. The install step below looks
+    # for it there when the Socket action left no sfw on the PATH.
+    - name: Install Socket Firewall from the npm registry
+      run: command -v sfw > /dev/null || (cd "$GITHUB_ACTION_PATH/sfw" && npm ci --ignore-scripts)
+      shell: bash
+    # sfw proxies the install and calls Socket's API as it goes, so a dropped
+    # connection kills the install (exit 137). Retry that and only that: the
+    # firewall refusing a package exits with npm's own status, which stays
+    # fatal, so a blocked dependency can never be retried into a pass.
+    - name: Install dependencies through Socket Firewall
+      run: |
+        PATH="$PATH:$GITHUB_ACTION_PATH/sfw/node_modules/.bin"
+        for attempt in 1 2 3; do
+          status=0
+          sfw npm ci || status=$?
+          if [ "$status" -eq 0 ]; then exit 0; fi
+          if [ "$status" -ne 137 ]; then exit "$status"; fi
+          echo "Socket Firewall was killed mid-install (exit 137) on attempt ${attempt}; retrying..."
+          sleep $((attempt * 10))
+        done
+        exit 137
+      shell: bash
