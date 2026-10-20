@@ -25,6 +25,9 @@ export const CRUISE_SPEED = unitsPerSecond(3.5);
 /** Four miles an hour: the speed limit on most canals. */
 export const TOP_SPEED = unitsPerSecond(4);
 export const ASTERN_SPEED = -unitsPerSecond(1.5);
+/** Slow past moored boats, as you should, and slower still into and out of a lock. */
+export const PASSING_SPEED = unitsPerSecond(1.8);
+export const LOCK_SPEED = unitsPerSecond(2);
 export const ACCELERATION = 0.7;
 export const BRAKING = 1.1;
 

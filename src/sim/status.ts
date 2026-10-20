@@ -1,28 +1,43 @@
 // What's happening, in a sentence, and what's coming up next.
 
 import { CRUISE_SPEED } from './boat';
-import { CHAMBER_HALF, steersItselfHere } from './trip';
-import type { LockStage, RouteLock, Trip, TripPlan } from './trip';
+import { CHAMBER_HALF } from './lock';
+import type { Job, Part, Where } from './lock';
+import { lockForYou, steersItselfHere } from './trip';
+import type { RouteLock, Trip, TripPlan } from './trip';
 
-function lockWords(lock: RouteLock, stage: LockStage): string {
+export const PART_NAMES: Readonly<Record<Part, string>> = {
+  bottomPaddle: 'bottom paddle',
+  topPaddle: 'top paddle',
+  bottomGates: 'bottom gates',
+  topGates: 'top gate',
+};
+
+const levelWord = (fill: boolean) => (fill ? 'fill' : 'empty');
+
+/** The next job at a lock you're working, as an instruction. */
+export function jobWords(lock: RouteLock, job: Job, where: Where): string {
   const up = lock.goingUp;
-  switch (stage) {
-    case 'tying-up':
-      return `Tied up ${up ? 'below' : 'above'} ${lock.name}.`;
-    case 'levelling-for-you':
-      return `${lock.name} is ${up ? 'full' : 'empty'}, so it's being ${up ? 'emptied' : 'filled'} for you first.`;
-    case 'opening-entry':
-      return `Opening the ${up ? 'bottom' : 'top'} gates.`;
-    case 'entering':
-      return 'The gates are open, so in you go.';
-    case 'closing-entry':
-      return 'Closing the gates behind you.';
-    case 'levelling':
-      return up ? 'The lock fills, lifting the boat up to the next level.' : 'The lock empties, lowering the boat to the next level.';
-    case 'opening-exit':
-      return `Opening the ${up ? 'top' : 'bottom'} gates.`;
-    case 'leaving':
+  switch (job.kind) {
+    case 'raise':
+      return where === 'before'
+        ? `${lock.name} is ${job.fill ? 'empty' : 'full'}, so ${levelWord(job.fill)} it first: wind up the ${PART_NAMES[job.part]}.`
+        : `Wind up the ${PART_NAMES[job.part]} to ${levelWord(job.fill)} the lock.`;
+    case 'wait-water':
+      if (where === 'before') return `The lock is ${job.fill ? 'filling' : 'emptying'}. Its gates open once it's level.`;
+      return job.fill ? 'The lock fills, lifting the boat up to the next level.' : 'The lock empties, lowering the boat to the next level.';
+    case 'lower':
+      return `Wind the ${PART_NAMES[job.part]} back down, so the lock can ${(where === 'in') === up ? 'fill' : 'empty'}.`;
+    case 'open':
+      return where === 'before' ? `Open the ${PART_NAMES[job.part]} to let the boat in.` : `The lock is level. Open the ${PART_NAMES[job.part]} to let the boat out.`;
+    case 'close':
+      return `Close the ${PART_NAMES[job.part]} behind the boat.`;
+    case 'boat-in':
+      return 'The gates are open, so the boat glides into the lock.';
+    case 'boat-out':
       return `Out of ${lock.name} and on ${up ? 'up' : 'down'} the canal.`;
+    case 'done':
+      return '';
   }
 }
 
@@ -30,7 +45,16 @@ export function describe(trip: Trip, plan: TripPlan): string {
   const s = trip.boat.s;
   if (trip.phase === 'moored') return `Moored at ${plan.startName}. Cast off when you're ready.`;
   if (trip.phase === 'arrived') return `Moored at ${plan.endName} for the night. That's the end of the trip for now.`;
-  if (trip.stage) return lockWords(trip.stage.lock, trip.stage.name);
+  const passage = trip.passage;
+  if (passage && !passage.yours) {
+    const side = passage.lock.goingUp ? 'below' : 'above';
+    return trip.other?.way === 'down'
+      ? `Waiting ${side} ${passage.lock.name} while another boat comes down through it.`
+      : `Waiting ${side} ${passage.lock.name} while the boat ahead goes up through it.`;
+  }
+  const yours = lockForYou(trip);
+  if (yours) return jobWords(yours.lock, yours.job, yours.where);
+  if (passage) return passage.crew ? `Working ${passage.lock.name}.` : `Out of ${passage.lock.name} and on ${passage.lock.goingUp ? 'up' : 'down'} the canal.`;
   if (trip.helm === 'you') return 'You have the tiller. Let go and the boat carries on by itself.';
 
   const junction = plan.junctions.find((j) => Math.abs(s - j.s) < 150);

@@ -64,6 +64,9 @@ export const LIVERIES: readonly Livery[] = [
 /** Your own boat. */
 export const YOUR_BOAT: Livery & { steerer: string } = { roof: '#2f6b4a', side: '#b8433a', steerer: '#e9c46a' };
 
+/** The other boat that uses the lock before you. */
+export const OTHER_BOAT: Livery & { steerer: string } = { roof: '#e8dcc0', side: '#2f4f86', steerer: '#a8402f' };
+
 export const livery = (n: number): Livery => LIVERIES[((n % LIVERIES.length) + LIVERIES.length) % LIVERIES.length];
 
 /** A colour part way between two hex colours. */

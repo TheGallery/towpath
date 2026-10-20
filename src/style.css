@@ -210,6 +210,7 @@ button:focus-visible {
 
 .toast {
   position: absolute;
+  z-index: 6;
   left: 50%;
   bottom: 104px;
   max-width: min(28rem, calc(100% - 32px));
@@ -365,6 +366,209 @@ button:focus-visible {
   font-size: 18px;
 }
 
+/* ---- Working the lock -------------------------------------------------- */
+
+.work-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px 10px 18px;
+  font-size: 15px;
+}
+
+.work-button kbd {
+  margin: 0;
+}
+
+.lock-panel {
+  padding: 8px;
+}
+
+.lock-panel[hidden] {
+  display: none;
+}
+
+.lock-focus {
+  cursor: pointer;
+}
+
+.lock-focus .world-glow {
+  stroke: #fff6b8;
+  stroke-width: 2;
+  opacity: 0.55;
+}
+
+.lock-focus.glowing .world-glow {
+  opacity: 1;
+  filter: drop-shadow(0 0 2px #ffcf3a);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: glow-pulse 1.3s ease-in-out infinite;
+}
+
+@keyframes glow-pulse {
+  0%,
+  100% {
+    transform: scale(0.85);
+    stroke-opacity: 1;
+  }
+
+  50% {
+    transform: scale(1.3);
+    stroke-opacity: 0.45;
+  }
+}
+
+/* The close-up fills the game, zooming out of the part you went to. */
+.closeup {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: #c4b48a;
+}
+
+.closeup[hidden] {
+  display: none;
+}
+
+.closeup.zoom {
+  animation: closeup-zoom 0.45s cubic-bezier(0.2, 0.7, 0.2, 1);
+  transform-origin: var(--from-x, 50%) var(--from-y, 50%);
+}
+
+@keyframes closeup-zoom {
+  from {
+    transform: scale(0.08);
+    opacity: 0.2;
+  }
+
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.closeup-open .hud {
+  display: none;
+}
+
+/* Clear of the close-up's own words at the bottom. */
+.closeup-open .toast {
+  top: 76px;
+  bottom: auto;
+}
+
+.closeup-art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  outline: none;
+}
+
+.closeup-art:focus-visible {
+  outline: 3px solid #e9c46a;
+  outline-offset: -3px;
+}
+
+.closeup-head {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  max-width: calc(100% - 32px);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-radius: 999px;
+  padding: 6px 6px 6px 18px;
+  background: #2e3a33;
+  color: #f3ecdc;
+  box-shadow: var(--shadow);
+}
+
+.closeup-title {
+  font: 650 15px/1.2 var(--sans);
+}
+
+.closeup-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  border: none;
+  border-radius: 999px;
+  padding: 7px 8px 7px 14px;
+  background: #f3ecdc;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.closeup-back kbd {
+  margin: 0;
+}
+
+.closeup-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  width: min(40rem, calc(100% - 32px));
+  transform: translateX(-50%);
+  border: 1px solid var(--paper-edge);
+  border-radius: 14px;
+  padding: 10px 16px;
+  background: rgb(246 238 219 / 0.95);
+  box-shadow: var(--shadow);
+  font-size: 15px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+/* Words and rings drawn in the close-ups. */
+.cu-tag {
+  font: 600 14px var(--sans);
+  fill: #f3ecdc;
+  paint-order: stroke;
+  stroke: #161c18;
+  stroke-width: 3.5px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.cu-pill {
+  font: 650 17px var(--sans);
+  fill: #f3ecdc;
+  pointer-events: none;
+}
+
+.cu-water {
+  font: 650 15px var(--sans);
+  fill: #eef8fb;
+  pointer-events: none;
+}
+
+.cu-hot {
+  cursor: grab;
+}
+
+.closeup-art:active .cu-hot {
+  cursor: grabbing;
+}
+
+.cu-glow {
+  stroke: #fff6b8;
+  stroke-width: 3.2;
+  pointer-events: none;
+  filter: drop-shadow(0 0 3px #ffcf3a);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: glow-pulse 1.3s ease-in-out infinite;
+}
+
 /* ---- Names on the map, drawn in the SVG -------------------------------- */
 
 .map-label {
@@ -450,6 +654,35 @@ button:focus-visible {
   .card h1 {
     font-size: 36px;
   }
+
+  /* Above the steering and trip panels, where there's no room between them, with any message above it. */
+  .game:has(.lock-panel:not([hidden])) .toast {
+    bottom: 164px;
+  }
+
+  .lock-panel {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 8px);
+    transform: translateX(-50%);
+    white-space: nowrap;
+  }
+
+  .closeup-head {
+    top: 10px;
+    left: 10px;
+    max-width: calc(100% - 20px);
+  }
+
+  .closeup-title {
+    font-size: 14px;
+  }
+
+  .closeup-hint {
+    bottom: 10px;
+    width: calc(100% - 20px);
+    font-size: 14px;
+  }
 }
 
 /* Between the steering and trip panels when there's room, above them when not. */
@@ -483,5 +716,11 @@ button:focus-visible {
   .toast,
   .helm-panel {
     transition: none;
+  }
+
+  .closeup.zoom,
+  .cu-glow,
+  .lock-focus.glowing .world-glow {
+    animation: none;
   }
 }

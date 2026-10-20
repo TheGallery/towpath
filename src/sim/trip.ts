@@ -1,6 +1,7 @@
 // A day's trip along the route: the boat casts off, cruises by itself, slows
-// past moored boats, goes through each lock and moors at the end. You can take
-// the tiller whenever you like, and the boat takes it back when you let go.
+// past moored boats, ties up at each lock for you to work it, and moors at the
+// end. You can take the tiller whenever you like, and the boat takes it back
+// when you let go. Another boat uses the first lock just before you.
 
 import { clamp } from '../core/math';
 import { headingAt } from '../core/track';
@@ -8,8 +9,12 @@ import type { Track } from '../core/track';
 import { BOAT_LENGTH, MOORED_OFFSET, unitsPerSecond } from '../world/dimensions';
 import { routeDistance } from '../world/stretch';
 import type { FeatureData, Stretch } from '../world/stretch';
-import { ASTERN_SPEED, CRUISE_SPEED, TOP_SPEED, moveBoat } from './boat';
+import { ASTERN_SPEED, CRUISE_SPEED, LOCK_SPEED, PASSING_SPEED, TOP_SPEED, moveBoat } from './boat';
 import type { Boat, Bump, Helm, Obstacle } from './boat';
+import { CHAMBER_HALF, LANDING_GAP, LEVEL_TOLERANCE, crewStep, isOpen, lockEnds, newCrew, newLock, nextJob, nextPart, stepLock, whereIs } from './lock';
+import type { Crew, Job, LockEvent, LockState, Part, Span, Where } from './lock';
+import { KEEP_RIGHT, lockWaterFor, newOtherBoat, otherSpan, stepOther } from './otherboat';
+import type { OtherBoat, OtherBoatPlan, OtherEvent, OtherWay } from './otherboat';
 
 /** What you're pressing: the tiller left or right, and the throttle ahead or astern. */
 export interface Controls {
@@ -19,9 +24,7 @@ export interface Controls {
 
 export const NO_CONTROLS: Controls = { rudder: 0, throttle: 0 };
 
-export const PASSING_SPEED = unitsPerSecond(1.8);
 export const JUNCTION_SPEED = unitsPerSecond(2.2);
-export const LOCK_SPEED = unitsPerSecond(1.5);
 
 /** Seconds without touching the controls before the boat steers itself again. */
 export const HAND_BACK_AFTER = 3;
@@ -29,39 +32,12 @@ export const HAND_BACK_AFTER = 3;
 const THROTTLE_RATE = 2.5;
 /** How gently the boat plans to slow down, in units per second per second. */
 const EASE_OFF = 0.45;
-
-export const GATE_TIME = 12;
-export const LEVEL_TIME = 42;
-const TIE_UP_TIME = 3;
-/** The gates sit this far either side of a lock's middle. */
-export const CHAMBER_HALF = 72;
-/** Where the boat ties up before a lock, measured from its middle. */
-export const LANDING_GAP = 205;
+/** The other boat sets off when you are this far below the lock's landing, so it meets you there. */
+const OTHER_BOAT_LEAD: Readonly<Record<OtherWay, number>> = { down: 650, up: 150 };
 
 const HALF_LENGTH = BOAT_LENGTH / 2;
 /** How far to keep left of the centre line when passing moored boats. */
 const PASSING_LINE = -6;
-
-export type LockStage =
-  | 'tying-up'
-  | 'levelling-for-you'
-  | 'opening-entry'
-  | 'entering'
-  | 'closing-entry'
-  | 'levelling'
-  | 'opening-exit'
-  | 'leaving';
-
-/** The state of one lock's water and gates. */
-export interface LockWork {
-  /** Water in the chamber: 0 at the lower level, 1 at the upper. */
-  water: number;
-  /** How far open each pair of gates is, 0 to 1. */
-  bottomGates: number;
-  topGates: number;
-  /** Set once a boat has left, so the gates swing shut behind it. */
-  closeBehind: 'bottom' | 'top' | null;
-}
 
 /** One lock on the route, as the trip meets it. */
 export interface RouteLock {
@@ -93,6 +69,8 @@ export interface TripPlan {
   readonly junctions: readonly RouteJunction[];
   /** Every named place along the route, in order. */
   readonly places: readonly { readonly name: string; readonly s: number }[];
+  /** The other boat's canal and the lock it uses, the first on the route. */
+  readonly other: OtherBoatPlan | null;
 }
 
 export function planTrip(stretch: Stretch): TripPlan {
@@ -101,8 +79,18 @@ export function planTrip(stretch: Stretch): TripPlan {
   const moorings: { name: string; from: number; to: number }[] = [];
   const obstacles: Obstacle[] = [];
   let endName = data.trip.to;
+  let other: OtherBoatPlan | null = null;
   for (const { feature, s } of stretch.onRoute) {
-    if (feature.kind === 'lock') locks.push({ id: feature.id, name: feature.name, s, goingUp: feature.uphill > 0 });
+    if (feature.kind === 'lock') {
+      locks.push({ id: feature.id, name: feature.name, s, goingUp: feature.uphill > 0 });
+      const track = stretch.waterways.get(feature.waterway);
+      if (track && !other) {
+        const slow = data.features.flatMap((f) =>
+          f.kind === 'moorings' && f.waterway === feature.waterway ? [{ from: Math.min(...f.boats.map((b) => b.at)) - HALF_LENGTH, to: Math.max(...f.boats.map((b) => b.at)) + HALF_LENGTH }] : [],
+        );
+        other = { track, lock: { id: feature.id, at: feature.at, uphill: feature.uphill }, slow, trigger: { down: s - LANDING_GAP - OTHER_BOAT_LEAD.down, up: s - LANDING_GAP - OTHER_BOAT_LEAD.up } };
+      }
+    }
     if (feature.kind === 'moorings') {
       const at = feature.boats.map((b) => routeDistance(stretch, feature.waterway, b.at) ?? s);
       for (const bs of at) obstacles.push({ s: bs, d: MOORED_OFFSET });
@@ -121,10 +109,19 @@ export function planTrip(stretch: Stretch): TripPlan {
   // Moorings count as reached where the moored boats begin.
   const placeAt = (f: FeatureData, s: number) => (f.kind === 'moorings' ? (moorings.find((m) => m.name === f.name)?.from ?? s) : s);
   const places = [...stretch.onRoute.map(({ feature, s }) => ({ name: feature.name, s: placeAt(feature, s) })), ...junctions].sort((a, b) => a.s - b.s);
-  return { route, start: stretch.start, end: stretch.end, startName: data.trip.from.name, endName, legs, locks, moorings, obstacles, junctions, places };
+  return { route, start: stretch.start, end: stretch.end, startName: data.trip.from.name, endName, legs, locks, moorings, obstacles, junctions, places, other };
 }
 
 export type TripPhase = 'moored' | 'cruising' | 'in-lock' | 'arrived';
+
+/** Your boat's way through the lock it has tied up at. */
+export interface Passage {
+  readonly lock: RouteLock;
+  /** Set once no other boat is using the lock, so it's yours to work. */
+  yours: boolean;
+  /** Works the lock for you, on a crewed trip. */
+  readonly crew: Crew | null;
+}
 
 export interface Trip {
   /** Seconds since the day began. */
@@ -137,10 +134,20 @@ export interface Trip {
   idle: number;
   /** The speed you've set, while you have the tiller. */
   throttle: number;
-  locks: Map<string, LockWork>;
-  /** The lock the boat is working through, and how far it has got. */
-  stage: { lock: RouteLock; name: LockStage; time: number } | null;
+  locks: Map<string, LockState>;
+  passage: Passage | null;
+  /** Locks being closed up behind your boat once it has left. */
+  tidying: { readonly lock: RouteLock; readonly crew: Crew }[];
+  other: OtherBoat | null;
+  /** Locks are worked for you, as when timing the trip, rather than by hand. */
+  readonly crewed: boolean;
   lastBump: number;
+}
+
+export interface TripOptions {
+  /** Which way the other boat goes through the first lock, if there is one. */
+  readonly other?: OtherWay | null;
+  readonly crewed?: boolean;
 }
 
 export type TripEvent =
@@ -149,11 +156,17 @@ export type TripEvent =
   | { readonly kind: 'handed-back' }
   | { readonly kind: 'helm-taken'; readonly reason: 'lock' | 'junction' | 'mooring' }
   | { readonly kind: 'bump'; readonly what: Bump }
-  | { readonly kind: 'lock-stage'; readonly lock: string; readonly stage: LockStage }
+  | { readonly kind: 'reached-lock'; readonly lock: string; readonly waiting: boolean }
+  | { readonly kind: 'lock-yours'; readonly lock: string; readonly ready: boolean }
+  | { readonly kind: 'lock'; readonly lock: string; readonly event: LockEvent }
   | { readonly kind: 'cleared-lock'; readonly lock: string }
+  | { readonly kind: 'other-boat'; readonly event: OtherEvent['kind'] }
   | { readonly kind: 'arrived' };
 
-export function newTrip(plan: TripPlan): Trip {
+export function newTrip(plan: TripPlan, options: TripOptions = {}): Trip {
+  const other = plan.other && options.other ? newOtherBoat(options.other) : null;
+  const locks = new Map(plan.locks.map((l) => [l.id, newLock(0)]));
+  if (other && plan.other) locks.set(plan.other.lock.id, newLock(lockWaterFor(other.way)));
   return {
     time: 0,
     phase: 'moored',
@@ -161,8 +174,11 @@ export function newTrip(plan: TripPlan): Trip {
     helm: 'auto',
     idle: 0,
     throttle: 0,
-    locks: new Map(plan.locks.map((l) => [l.id, { water: 0, bottomGates: 0, topGates: 0, closeBehind: null }])),
-    stage: null,
+    locks,
+    passage: null,
+    tidying: [],
+    other,
+    crewed: options.crewed ?? false,
     lastBump: -Infinity,
   };
 }
@@ -203,16 +219,64 @@ export function plannedSpeed(plan: TripPlan, s: number): number {
   return Math.min(want, stoppingSpeed(plan.end - s));
 }
 
-/** Which line on the water the boat keeps to by itself. */
-function autoLine(plan: TripPlan, s: number): number {
-  return plan.moorings.some((m) => s > m.from - 40 && s < m.to) ? PASSING_LINE : 0;
+/** Where the other boat is along your route, if it's on the stretch you share. */
+function otherOnRoute(trip: Trip, plan: TripPlan): { s: number; d: number; oncoming: boolean } | null {
+  const o = trip.other;
+  const lock = plan.locks.find((l) => l.id === plan.other?.lock.id);
+  if (!o || !lock || o.phase === 'gone') return null;
+  const s = lock.s + (lock.goingUp ? o.x : -o.x);
+  if (s > (plan.junctions[0]?.s ?? Infinity) - 40) return null;
+  return { s, d: o.d, oncoming: (o.way === 'up') !== lock.goingUp };
 }
 
-/** Moves a value towards 0 or 1 over `seconds`. Returns true once it gets there. */
-function towards(value: number, target: number, seconds: number, dt: number, set: (v: number) => void): boolean {
-  const next = target > value ? Math.min(target, value + dt / seconds) : Math.max(target, value - dt / seconds);
-  set(next);
-  return next === target;
+/** Which line on the water the boat keeps to by itself. */
+function autoLine(trip: Trip, plan: TripPlan, s: number): number {
+  const other = otherOnRoute(trip, plan);
+  const meeting = other !== null && other.oncoming && other.s > s && other.s - s < 300;
+  if (plan.moorings.some((m) => s > m.from - 40 && s < m.to)) return meeting ? 0 : PASSING_LINE;
+  // Tie up on the towpath side below a lock, keeping clear of a boat coming out.
+  if (meeting || plan.locks.some((l) => s > l.s - LANDING_GAP - 300 && s < l.s - LANDING_GAP + 1)) return KEEP_RIGHT;
+  return 0;
+}
+
+/** The stretch of a lock your boat takes up, measured from its middle towards the top gate. */
+export function yourSpan(boat: Boat, lock: RouteLock): Span {
+  const x = (boat.s - lock.s) * (lock.goingUp ? 1 : -1);
+  return { from: x - HALF_LENGTH, to: x + HALF_LENGTH };
+}
+
+/** Every boat in or near a lock, which its gates must not close on. */
+export function boatsAt(trip: Trip, plan: TripPlan, lock: RouteLock): Span[] {
+  const spans: Span[] = [];
+  const yours = yourSpan(trip.boat, lock);
+  if (Math.abs(yours.from) < 600) spans.push(yours);
+  if (trip.other && trip.other.phase !== 'gone' && plan.other?.lock.id === lock.id) spans.push(otherSpan(trip.other));
+  return spans;
+}
+
+/** True when no other boat is using the lock or in the way of yours. */
+function lockFree(trip: Trip, plan: TripPlan, lock: RouteLock): boolean {
+  const o = trip.other;
+  if (!o || plan.other?.lock.id !== lock.id || o.phase === 'gone') return true;
+  if (o.phase !== 'away' || !o.crew.done) return false;
+  const yours = yourSpan(trip.boat, lock);
+  const theirs = otherSpan(o);
+  return theirs.to < Math.min(yours.from, -CHAMBER_HALF - 20) - 10 || theirs.from > Math.max(yours.to, CHAMBER_HALF + 20) + 10;
+}
+
+/** How the boat moves on its way through a lock: it waits until the gates ahead of it are open. */
+function passageMove(trip: Trip, passage: Passage): { speed: number; line: number; stop: number | null } {
+  const { boat } = trip;
+  const { lock } = passage;
+  const state = trip.locks.get(lock.id);
+  const hold = { speed: 0, line: KEEP_RIGHT, stop: boat.s };
+  if (!passage.yours || !state) return hold;
+  const e = lockEnds(lock.goingUp);
+  const toMiddle = { speed: Math.min(LOCK_SPEED, stoppingSpeed(lock.s - boat.s)), line: 0, stop: lock.s };
+  const where = whereIs(yourSpan(boat, lock), lock.goingUp);
+  if (where === 'before') return isOpen(state[e.entryGate]) ? toMiddle : hold;
+  if (where === 'in' && !isOpen(state[e.exitGate])) return boat.s >= lock.s ? { ...hold, line: 0 } : toMiddle;
+  return { speed: LOCK_SPEED, line: 0, stop: null };
 }
 
 export function stepTrip(trip: Trip, plan: TripPlan, controls: Controls, dt: number): TripEvent[] {
@@ -220,10 +284,21 @@ export function stepTrip(trip: Trip, plan: TripPlan, controls: Controls, dt: num
   trip.time += dt;
   const boat = trip.boat;
 
-  // Gates left open behind a boat swing shut by themselves.
-  for (const work of trip.locks.values()) {
-    if (work.closeBehind === 'top' && towards(work.topGates, 0, GATE_TIME, dt, (v) => (work.topGates = v))) work.closeBehind = null;
-    if (work.closeBehind === 'bottom' && towards(work.bottomGates, 0, GATE_TIME, dt, (v) => (work.bottomGates = v))) work.closeBehind = null;
+  // The other boat, and closing up behind your boat at locks it has left.
+  const otherLock = plan.other && trip.locks.get(plan.other.lock.id);
+  if (trip.other && plan.other && otherLock) {
+    for (const e of stepOther(trip.other, plan.other, otherLock, dt, trip.phase === 'moored' ? -Infinity : boat.s)) events.push({ kind: 'other-boat', event: e.kind });
+  }
+  trip.tidying = trip.tidying.filter(({ lock, crew }) => {
+    const state = trip.locks.get(lock.id);
+    if (state) crewStep(state, crew, 'after', dt);
+    return !crew.done;
+  });
+  for (const l of plan.locks) {
+    const state = trip.locks.get(l.id);
+    if (!state) continue;
+    const happened = stepLock(state, dt, boatsAt(trip, plan, l));
+    if (trip.passage?.lock.id === l.id && trip.passage.yours) for (const event of happened) events.push({ kind: 'lock', lock: l.id, event });
   }
 
   if (trip.phase === 'moored' || trip.phase === 'arrived') {
@@ -253,17 +328,19 @@ export function stepTrip(trip: Trip, plan: TripPlan, controls: Controls, dt: num
   if (trip.helm === 'you') {
     trip.throttle = clamp(trip.throttle + controls.throttle * THROTTLE_RATE * dt, ASTERN_SPEED, TOP_SPEED);
     helm = { kind: 'tiller', rudder: controls.rudder, speed: trip.throttle };
-  } else if (trip.phase === 'in-lock' && trip.stage) {
-    const { speed, stop } = lockSpeed(trip.stage.lock, trip.stage.name, boat.s);
-    stopAt = stop;
-    helm = { kind: 'auto', line: 0, speed };
+  } else if (trip.phase === 'in-lock' && trip.passage) {
+    const move = passageMove(trip, trip.passage);
+    stopAt = move.stop;
+    helm = { kind: 'auto', line: move.line, speed: move.speed };
   } else {
-    helm = { kind: 'auto', line: autoLine(plan, boat.s), speed: plannedSpeed(plan, boat.s) };
+    helm = { kind: 'auto', line: autoLine(trip, plan, boat.s), speed: plannedSpeed(plan, boat.s) };
     const landing = plan.locks.find((l) => boat.s <= l.s - LANDING_GAP + 0.5);
     stopAt = Math.min(landing ? landing.s - LANDING_GAP : Infinity, plan.end);
   }
 
-  const bump = moveBoat(boat, plan.route, helm, dt, plan.obstacles);
+  const other = otherOnRoute(trip, plan);
+  const obstacles = other ? [...plan.obstacles, { s: other.s, d: other.d }] : plan.obstacles;
+  const bump = moveBoat(boat, plan.route, helm, dt, obstacles);
   if (stopAt !== null && boat.s > stopAt) {
     boat.s = stopAt;
     boat.v = 0;
@@ -280,81 +357,62 @@ export function stepTrip(trip: Trip, plan: TripPlan, controls: Controls, dt: num
     const landing = plan.locks.find((l) => Math.abs(boat.s - (l.s - LANDING_GAP)) < 0.6);
     if (landing && boat.v < 0.3) {
       trip.phase = 'in-lock';
-      trip.stage = { lock: landing, name: 'tying-up', time: 0 };
-      events.push({ kind: 'lock-stage', lock: landing.id, stage: 'tying-up' });
+      trip.passage = { lock: landing, yours: false, crew: trip.crewed ? newCrew(landing.goingUp) : null };
+      events.push({ kind: 'reached-lock', lock: landing.id, waiting: !lockFree(trip, plan, landing) });
     } else if (boat.s >= plan.end - 0.6 && boat.v < 0.3) {
       trip.phase = 'arrived';
       boat.v = 0;
       events.push({ kind: 'arrived' });
     }
-  } else if (trip.phase === 'in-lock' && trip.stage) {
-    workLock(trip, dt, events);
+  } else if (trip.phase === 'in-lock' && trip.passage) {
+    workPassage(trip, plan, trip.passage, dt, events);
   }
   return events;
 }
 
-/** How the boat moves during each part of going through a lock. */
-function lockSpeed(lock: RouteLock, stage: LockStage, s: number): { speed: number; stop: number | null } {
-  if (stage === 'entering') return { speed: Math.min(LOCK_SPEED, stoppingSpeed(lock.s - s)), stop: lock.s };
-  if (stage === 'leaving') return { speed: LOCK_SPEED, stop: null };
-  return { speed: 0, stop: s };
-}
-
-/** The lock's side of things: gates and water, one job at a time, done for you for now. */
-function workLock(trip: Trip, dt: number, events: TripEvent[]): void {
-  const stage = trip.stage;
-  if (!stage) return;
-  const work = trip.locks.get(stage.lock.id);
-  if (!work) return;
-  stage.time += dt;
-  const up = stage.lock.goingUp;
-  const entryLevel = up ? 0 : 1;
-  const exitLevel = 1 - entryLevel;
-  const entryGate = up ? 'bottomGates' : 'topGates';
-  const exitGate = up ? 'topGates' : 'bottomGates';
-  const next = (name: LockStage) => {
-    stage.name = name;
-    stage.time = 0;
-    events.push({ kind: 'lock-stage', lock: stage.lock.id, stage: name });
-  };
-  const boat = trip.boat;
-
-  switch (stage.name) {
-    case 'tying-up':
-      if (stage.time >= TIE_UP_TIME) next(work.water === entryLevel ? 'opening-entry' : 'levelling-for-you');
-      break;
-    case 'levelling-for-you':
-      if (towards(work.water, entryLevel, LEVEL_TIME, dt, (v) => (work.water = v))) next('opening-entry');
-      break;
-    case 'opening-entry':
-      if (towards(work[entryGate], 1, GATE_TIME, dt, (v) => (work[entryGate] = v))) next('entering');
-      break;
-    case 'entering':
-      if (Math.abs(boat.s - stage.lock.s) < 0.6 && boat.v < 0.3) next('closing-entry');
-      break;
-    case 'closing-entry':
-      if (towards(work[entryGate], 0, GATE_TIME, dt, (v) => (work[entryGate] = v))) next('levelling');
-      break;
-    case 'levelling':
-      if (towards(work.water, exitLevel, LEVEL_TIME, dt, (v) => (work.water = v))) next('opening-exit');
-      break;
-    case 'opening-exit':
-      if (towards(work[exitGate], 1, GATE_TIME, dt, (v) => (work[exitGate] = v))) next('leaving');
-      break;
-    case 'leaving':
-      if (boat.s - HALF_LENGTH > stage.lock.s + CHAMBER_HALF + 8) {
-        work.closeBehind = up ? 'top' : 'bottom';
-        events.push({ kind: 'cleared-lock', lock: stage.lock.id });
-        trip.stage = null;
-        trip.phase = 'cruising';
-      }
-      break;
+/** Your side of the lock: waiting for it to be free, the crew's work on a crewed trip, and leaving. */
+function workPassage(trip: Trip, plan: TripPlan, passage: Passage, dt: number, events: TripEvent[]): void {
+  const state = trip.locks.get(passage.lock.id);
+  if (!state) return;
+  const { lock } = passage;
+  if (!passage.yours) {
+    if (!lockFree(trip, plan, lock)) return;
+    passage.yours = true;
+    const entryLevel = lockEnds(lock.goingUp).entryLevel;
+    events.push({ kind: 'lock-yours', lock: lock.id, ready: Math.abs(state.water - entryLevel) <= LEVEL_TOLERANCE });
+  }
+  const where = whereIs(yourSpan(trip.boat, lock), lock.goingUp);
+  if (passage.crew && where !== 'after') crewStep(state, passage.crew, where, dt);
+  if (where === 'after') {
+    trip.tidying.push({ lock, crew: newCrew(lock.goingUp) });
+    events.push({ kind: 'cleared-lock', lock: lock.id });
+    trip.passage = null;
+    trip.phase = 'cruising';
   }
 }
 
-/** How long the trip takes if you leave the boat to it, in seconds. */
-export function tripDuration(plan: TripPlan, step = 0.25): number {
-  const trip = newTrip(plan);
+/** The lock that's waiting for you to work it, and its next job and part, if there is one. */
+export function lockForYou(
+  trip: Trip,
+): { readonly lock: RouteLock; readonly state: LockState; readonly where: Where; readonly job: Job; readonly next: { readonly part: Part; readonly target: 0 | 1 } | null } | null {
+  const passage = trip.passage;
+  if (!passage?.yours || passage.crew) return null;
+  const state = trip.locks.get(passage.lock.id);
+  if (!state) return null;
+  const where = whereIs(yourSpan(trip.boat, passage.lock), passage.lock.goingUp);
+  if (where === 'after') return null;
+  return { lock: passage.lock, state, where, job: nextJob(state, passage.lock.goingUp, where), next: nextPart(state, passage.lock.goingUp, where) };
+}
+
+/** True while the lock waiting for you still wants this part worked this way next. */
+export function wantsPart(trip: Trip, lockId: string, part: Part, target: 0 | 1): boolean {
+  const yours = lockForYou(trip);
+  return yours?.lock.id === lockId && yours.next?.part === part && yours.next.target === target;
+}
+
+/** How long the trip takes with the locks worked for you, in seconds. */
+export function tripDuration(plan: TripPlan, step = 0.25, other: OtherWay | null = 'down'): number {
+  const trip = newTrip(plan, { other, crewed: true });
   castOff(trip);
   while (trip.phase !== 'arrived' && trip.time < 4 * 60 * 60) stepTrip(trip, plan, NO_CONTROLS, step);
   return trip.time;
