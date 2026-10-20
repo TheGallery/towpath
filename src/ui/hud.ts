@@ -1,5 +1,6 @@
 // The words and buttons over the game: what's happening, who's steering, the
-// speed, what's next, the map key, and the cards at the start and end.
+// speed, what's next, the lock part that needs you, the map key, and the
+// cards at the start and end.
 
 import type { Upcoming } from '../sim/status';
 import type { TripPhase } from '../sim/trip';
@@ -12,6 +13,8 @@ export interface HudState {
   readonly mph: number;
   readonly next: Upcoming | null;
   readonly mapOpen: boolean;
+  /** The lock part that needs you, as the work button's words, or null when there's nothing to work. */
+  readonly work: string | null;
 }
 
 export interface HudOptions {
@@ -23,6 +26,7 @@ export interface HudOptions {
   readonly onCastOff: () => void;
   readonly onStartAgain: () => void;
   readonly onToggleMap: () => void;
+  readonly onWork: () => void;
 }
 
 const TOAST_TIME = 4500;
@@ -48,6 +52,9 @@ export class Hud {
   private readonly endCard: HTMLElement;
   private readonly castOffButton: HTMLButtonElement;
   private readonly againButton: HTMLButtonElement;
+  private readonly lockPanel: HTMLElement;
+  private readonly workButton: HTMLButtonElement;
+  private readonly workText: HTMLElement;
   private toastTimer = 0;
   private shown: Partial<Record<string, string>> = {};
 
@@ -66,9 +73,12 @@ export class Hud {
     this.endCard = byId(doc, 'end-card');
     this.castOffButton = byId(doc, 'cast-off');
     this.againButton = byId(doc, 'again');
+    this.lockPanel = byId(doc, 'lock-panel');
+    this.workButton = byId(doc, 'work-button');
+    this.workText = byId(doc, 'work-text');
 
     const minutes = Math.round(options.tripMinutes);
-    byId(doc, 'start-text').textContent = `Your narrowboat is moored at ${options.startName}. Cast off and it cruises by itself to ${options.endName}, about ${minutes} minutes away. Leave it running while you work, and look in when you like.`;
+    byId(doc, 'start-text').textContent = `Your narrowboat is moored at ${options.startName}. Cast off and it cruises by itself to ${options.endName}, about ${minutes} minutes away, waiting at the lock for you to work it. Leave it running while you work, and look in when you like.`;
     byId(doc, 'end-title').textContent = `Moored at ${options.endName}`;
     byId(doc, 'end-text').textContent = "The boat is tied up for the night. That's the whole trip for now.";
     this.againButton.textContent = `Start again from ${options.startName}`;
@@ -82,6 +92,7 @@ export class Hud {
     this.castOffButton.addEventListener('click', options.onCastOff);
     this.againButton.addEventListener('click', options.onStartAgain);
     this.mapButton.addEventListener('click', options.onToggleMap);
+    this.workButton.addEventListener('click', options.onWork);
     this.castOffButton.focus();
   }
 
@@ -108,6 +119,9 @@ export class Hud {
     }
     this.set(this.next, 'next', nextText);
 
+    this.lockPanel.hidden = state.work === null || state.mapOpen;
+    if (state.work !== null) this.set(this.workText, 'work', state.work);
+
     if (this.shown.map !== String(state.mapOpen)) {
       this.shown.map = String(state.mapOpen);
       this.mapButton.setAttribute('aria-pressed', String(state.mapOpen));
@@ -124,6 +138,12 @@ export class Hud {
       if (state.phase === 'moored' && was) this.castOffButton.focus();
       if (state.phase === 'arrived') this.againButton.focus();
     }
+  }
+
+  /** Puts the keyboard back on the work button after a close-up, or on the game when there's nothing to work. */
+  focusWork(): void {
+    if (!this.lockPanel.hidden) this.workButton.focus({ preventScroll: true });
+    else if (this.root.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
   }
 
   toast(message: string): void {

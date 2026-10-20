@@ -30,6 +30,11 @@
             <span><kbd aria-label="Up arrow">↑</kbd><kbd aria-label="Down arrow">↓</kbd> speed</span>
           </p>
         </section>
+        <section class="panel lock-panel" id="lock-panel" aria-label="The lock" hidden>
+          <button type="button" class="primary work-button" id="work-button" aria-keyshortcuts="Space">
+            <span id="work-text">Work the lock</span> <kbd>Space</kbd>
+          </button>
+        </section>
         <section class="panel trip-panel" aria-label="The trip">
           <p class="speed" id="speed">0.0 mph</p>
           <p class="next" id="next"></p>
@@ -37,6 +42,15 @@
       </div>
 
       <p class="toast" id="toast" role="status" aria-live="polite"></p>
+
+      <section class="closeup" id="closeup" role="dialog" aria-modal="true" aria-labelledby="closeup-title" hidden>
+        <svg class="closeup-art" viewBox="0 0 800 392" preserveAspectRatio="xMidYMid meet" tabindex="0" role="img" aria-label="Close-up of the part of the lock you are working. Use the mouse, or Space and the arrow keys."></svg>
+        <div class="closeup-head">
+          <h2 class="closeup-title" id="closeup-title"></h2>
+          <button type="button" class="closeup-back">Back to the lock <kbd>Esc</kbd></button>
+        </div>
+        <p class="closeup-hint" role="status" aria-live="polite"></p>
+      </section>
 
       <aside class="panel map-key" id="map-key" aria-label="Map key" hidden>
         <h2>Map key</h2>
@@ -58,6 +72,7 @@
           <ul class="controls">
             <li><span><kbd>←</kbd><kbd>→</kbd></span> Take the tiller and steer. Let go, and the boat carries on by itself.</li>
             <li><span><kbd>↑</kbd><kbd>↓</kbd></span> Speed up or slow down while you steer.</li>
+            <li><span><kbd>Space</kbd></span> Work the lock: go to the part that glows, and wind or push it in its close-up.</li>
             <li><span><kbd>M</kbd></span> Open the map, and press it again to come back.</li>
           </ul>
           <button type="button" class="primary" id="cast-off">Cast off</button>
