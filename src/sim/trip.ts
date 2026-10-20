@@ -275,7 +275,7 @@ function passageMove(trip: Trip, passage: Passage): { speed: number; line: numbe
   const toMiddle = { speed: Math.min(LOCK_SPEED, stoppingSpeed(lock.s - boat.s)), line: 0, stop: lock.s };
   const where = whereIs(yourSpan(boat, lock), lock.goingUp);
   if (where === 'before') return isOpen(state[e.entryGate]) ? toMiddle : hold;
-  if (where === 'in' && !isOpen(state[e.exitGate])) return toMiddle;
+  if (where === 'in' && !isOpen(state[e.exitGate])) return boat.s >= lock.s ? { ...hold, line: 0 } : toMiddle;
   return { speed: LOCK_SPEED, line: 0, stop: null };
 }
 
@@ -402,6 +402,12 @@ export function lockForYou(
   const where = whereIs(yourSpan(trip.boat, passage.lock), passage.lock.goingUp);
   if (where === 'after') return null;
   return { lock: passage.lock, state, where, job: nextJob(state, passage.lock.goingUp, where), next: nextPart(state, passage.lock.goingUp, where) };
+}
+
+/** True while the lock waiting for you still wants this part worked this way next. */
+export function wantsPart(trip: Trip, lockId: string, part: Part, target: 0 | 1): boolean {
+  const yours = lockForYou(trip);
+  return yours?.lock.id === lockId && yours.next?.part === part && yours.next.target === target;
 }
 
 /** How long the trip takes with the locks worked for you, in seconds. */

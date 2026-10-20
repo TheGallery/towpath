@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { poseAt } from '../src/core/track';
 import { CRUISE_SPEED, PASSING_SPEED, TOP_SPEED } from '../src/sim/boat';
-import { CHAMBER_HALF, LANDING_GAP, isGate } from '../src/sim/lock';
+import { CHAMBER_HALF, LANDING_GAP, isGate, newLock } from '../src/sim/lock';
 import type { GatePart, PaddlePart } from '../src/sim/lock';
 import { gateDone, holdPaddle, newGateHand, newPaddleHand, paddleDone, pressPaddle, settlePaddle, swingBeam } from '../src/sim/mechanism';
 import type { GateHand, PaddleHand } from '../src/sim/mechanism';
-import { otherPose } from '../src/sim/otherboat';
+import { newOtherBoat, otherPose, stepOther } from '../src/sim/otherboat';
 import type { OtherWay } from '../src/sim/otherboat';
 import { describe as say, upcoming } from '../src/sim/status';
 import {
@@ -20,6 +20,7 @@ import {
   steersItselfHere,
   stepTrip,
   tripDuration,
+  wantsPart,
 } from '../src/sim/trip';
 import type { Controls, Trip, TripEvent } from '../src/sim/trip';
 import { HALLAM } from '../src/world/hallam';
@@ -204,9 +205,55 @@ describe('going up through Brook Lock by hand', () => {
     expect(trip.boat.s).toBeCloseTo(s, 6);
     expect(trip.boat.s).toBeCloseTo(lock.s, 0);
   });
+
+  it("holds the boat where it is, past the middle, if the gates ahead swing back while it's leaving", () => {
+    const trip = underway(null, false);
+    const you = byHand();
+    run(trip, (t) => t.phase === 'in-lock' && t.boat.s > lock.s + 3, 3600, NO_CONTROLS, you.each);
+    const work = trip.locks.get(lock.id);
+    if (!work) throw new Error('no lock');
+    work.topGates = 0.9;
+    const s = trip.boat.s;
+    let lowest = s;
+    run(trip, () => false, 5, NO_CONTROLS, (t) => {
+      t.locks.get(lock.id)!.topGates = 0.9;
+      lowest = Math.min(lowest, t.boat.s);
+    });
+    expect(lowest).toBeGreaterThanOrEqual(s);
+    expect(trip.boat.v).toBe(0);
+  });
+
+  it('stops wanting a part once the lock has moved on from it', () => {
+    const trip = underway(null, false);
+    const you = byHand();
+    run(trip, (t) => t.phase === 'in-lock');
+    run(trip, (t) => t.passage?.yours === true);
+    expect(wantsPart(trip, lock.id, 'bottomGates', 1)).toBe(true);
+    expect(wantsPart(trip, lock.id, 'topGates', 1)).toBe(false);
+    run(trip, (t) => (t.locks.get(lock.id)?.bottomGates ?? 0) >= 0.95, 3600, NO_CONTROLS, you.each);
+    expect(wantsPart(trip, lock.id, 'bottomGates', 1)).toBe(false);
+    run(trip, (t) => t.phase === 'cruising', 3600, NO_CONTROLS, you.each);
+    expect(wantsPart(trip, lock.id, 'topGates', 1)).toBe(false);
+    expect(wantsPart(trip, lock.id, 'topGates', 0)).toBe(false);
+  });
 });
 
 describe('the other boat', () => {
+  it("doesn't jump back to the middle if the gates ahead swing back while it's leaving", () => {
+    const other = plan.other;
+    if (!other) throw new Error('no other boat');
+    const o = newOtherBoat('up');
+    o.phase = 'working';
+    o.crew.done = true;
+    o.x = 5;
+    o.v = 0.5;
+    const work = newLock(1);
+    work.topGates = 0.9;
+    stepOther(o, other, work, STEP, 0);
+    expect(o.x).toBe(5);
+    expect(o.v).toBe(0);
+  });
+
   it('comes down through the lock first and leaves it empty, with the gates open for you: three close-ups', () => {
     const trip = underway('down', false);
     const you = byHand();

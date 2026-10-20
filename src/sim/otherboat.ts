@@ -101,7 +101,7 @@ export function stepOther(o: OtherBoat, plan: OtherBoatPlan, lock: LockState, dt
   const before = o.x;
   o.x += ahead * o.v * dt;
   if (o.phase === 'working' && !exitOpen && o.x * ahead > 0) {
-    o.x = 0;
+    o.x = before * ahead > 0 ? before : 0;
     o.v = 0;
   }
 

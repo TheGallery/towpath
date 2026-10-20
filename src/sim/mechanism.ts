@@ -145,6 +145,10 @@ export type BeamPush = { readonly kind: 'drag'; readonly angle: number } | { rea
 
 /** Moves the gate on by `dt` seconds. The beam is heavy, so it gathers speed slowly and coasts to a stop. */
 export function swingBeam(hand: GateHand, lock: LockState, dt: number, push: BeamPush, spans: readonly Span[]): GateHeld | null {
+  if (!push && hand.spin === 0) {
+    hand.angle = GATE_SWING_ANGLE * (1 - lock[hand.part]);
+    return null;
+  }
   let accel: number;
   if (push?.kind === 'drag') {
     const want = clamp(push.angle, 0, GATE_SWING_ANGLE);

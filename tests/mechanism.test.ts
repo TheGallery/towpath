@@ -183,6 +183,20 @@ describe('a gate', () => {
     expect(lock.bottomGates).toBe(1);
   });
 
+  it('leaves the gate alone when nobody is pushing the beam, and follows it round', () => {
+    const lock = newLock(0);
+    lock.bottomGates = 0.96;
+    const hand = newGateHand(lock, 'bottomGates', 1);
+    lock.moving.bottomGates = { to: 0, rate: 1 / 8 };
+    for (let t = 0; t < 2; t += STEP) {
+      swingBeam(hand, lock, STEP, null, []);
+      stepLock(lock, STEP, []);
+    }
+    expect(lock.bottomGates).toBeLessThan(0.8);
+    swingBeam(hand, lock, STEP, null, []);
+    expect(hand.angle).toBeCloseTo(GATE_SWING_ANGLE * (1 - lock.bottomGates));
+  });
+
   it("won't close on the boat", () => {
     const lock = newLock(0);
     lock.bottomGates = 1;

@@ -7,7 +7,7 @@ import { Scene } from './render/scene';
 import type { Focus } from './render/scene';
 import type { OtherWay } from './sim/otherboat';
 import { PART_NAMES, describe, upcoming } from './sim/status';
-import { NO_CONTROLS, boatsAt, castOff, lockForYou, newTrip, planTrip, steersItselfHere, stepTrip, tripDuration } from './sim/trip';
+import { NO_CONTROLS, boatsAt, castOff, lockForYou, newTrip, planTrip, steersItselfHere, stepTrip, tripDuration, wantsPart } from './sim/trip';
 import type { TripEvent } from './sim/trip';
 import { GAME_TITLE } from './title';
 import { Closeup } from './ui/closeup';
@@ -74,7 +74,7 @@ function workLock(): void {
   const at = scene.partPoint(lock.id, next.part, state);
   const from = at && lastView ? { x: ((at[0] - lastView.x) / lastView.width) * game.clientWidth, y: ((at[1] - lastView.y) / lastView.height) * game.clientHeight } : { x: game.clientWidth / 2, y: game.clientHeight / 2 };
   game.classList.add('closeup-open');
-  closeup.open({ lockName: lock.name, lock: state, part: next.part, target: next.target, boats: () => boatsAt(trip, plan, lock), from });
+  closeup.open({ lockName: lock.name, lock: state, part: next.part, target: next.target, boats: () => boatsAt(trip, plan, lock), wanted: () => wantsPart(trip, lock.id, next.part, next.target), from });
 }
 
 const toggleMap = (open = !camera.mapOpen) => {

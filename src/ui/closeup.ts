@@ -36,6 +36,8 @@ export interface CloseupJob {
   readonly target: 0 | 1;
   /** The boats in the lock, which a gate must not close on. */
   readonly boats: () => readonly Span[];
+  /** Whether the lock still wants this part worked this way, which ends the job when it doesn't. */
+  readonly wanted: () => boolean;
   /** Where the part is on screen, in pixels, so the close-up can zoom out of it. */
   readonly from: { readonly x: number; readonly y: number };
 }
@@ -166,12 +168,12 @@ export class Closeup {
       if (keys.work) this.say(holdPaddle(hand, job.lock, dt));
       else if (keys.turn) this.say(windWindlass(hand, job.lock, keys.turn * KEY_WIND * dt));
       this.say(settlePaddle(hand, job.lock, dt, work.winding !== null || keys.work || keys.turn !== 0));
-      done = paddleDone(hand, job.lock);
+      done = paddleDone(hand, job.lock) || (!hand.fitted && !job.wanted());
     } else {
       const push: BeamPush = work.drag ? { kind: 'drag', angle: wrapAngle(Math.atan2(work.drag.at[1] - GATE_LAYOUT.hinge[1], work.drag.at[0] - GATE_LAYOUT.hinge[0]) + Math.PI) } : keys.work || keys.turn ? { kind: 'lean' } : null;
       work.held = swingBeam(work.hand, job.lock, dt, push, job.boats());
       if (push) this.say(work.held);
-      done = gateDone(work.hand, job.lock);
+      done = gateDone(work.hand, job.lock) || !job.wanted();
     }
     this.doneFor = done ? this.doneFor + dt : 0;
     if (this.doneFor > LINGER) this.close();
