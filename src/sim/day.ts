@@ -10,6 +10,8 @@ import type { Spot, Stretch } from '../world/stretch';
 import { CRUISE_SPEED } from './boat';
 import { answer, newCallBook, remind, ring } from './calls';
 import type { CallBook, CallKind } from './calls';
+import { newLogbook, noteEvents } from './logbook';
+import type { Logbook } from './logbook';
 import type { OtherWay } from './otherboat';
 import { NO_CONTROLS, castOff, lockForYou, newTrip, planTrip, stepTrip, switchWay } from './trip';
 import type { Controls, Trip, TripEvent, TripPlan } from './trip';
@@ -65,6 +67,8 @@ export interface Glide {
 }
 
 export interface Day {
+  /** Which day this is, counting from 1. */
+  readonly number: number;
   /** Seconds since the day began. */
   time: number;
   phase: DayPhase;
@@ -80,6 +84,7 @@ export interface Day {
   held: boolean;
   spot: Spot | null;
   glide: Glide | null;
+  readonly log: Logbook;
 }
 
 export interface DayOptions {
@@ -87,6 +92,8 @@ export interface DayOptions {
   readonly other?: OtherWay | null;
   /** Locks are worked for you, as when timing the day. */
   readonly crewed?: boolean;
+  /** Which day this is, counting from 1. */
+  readonly number?: number;
 }
 
 export type DayEvent =
@@ -97,12 +104,13 @@ export type DayEvent =
   | { readonly kind: 'phase'; readonly phase: DayPhase }
   /** The boat has stopped before the junction, waiting for you to choose. */
   | { readonly kind: 'held' }
-  | { readonly kind: 'chose-way'; readonly way: string }
+  | { readonly kind: 'chose-way'; readonly way: string; readonly junction: string }
   | { readonly kind: 'tied-up'; readonly spot: string };
 
 export function newDay(plan: DayPlan, options: DayOptions = {}): Day {
   const first = plan.ways[0];
   return {
+    number: options.number ?? 1,
     time: 0,
     phase: 'morning',
     phaseTime: 0,
@@ -113,7 +121,14 @@ export function newDay(plan: DayPlan, options: DayOptions = {}): Day {
     held: false,
     spot: null,
     glide: null,
+    log: newLogbook(),
   };
+}
+
+/** Notes what happened in the day's logbook, and passes the events on. */
+function noted(day: Day, events: DayEvent[]): DayEvent[] {
+  noteEvents(day, events);
+  return events;
 }
 
 function enter(day: Day, phase: DayPhase, events: DayEvent[]): void {
@@ -131,14 +146,14 @@ export function castOffDay(day: Day): DayEvent[] {
   const events: DayEvent[] = [...castOff(day.trip)];
   answered(day, 'cast-off', events);
   enter(day, 'underway', events);
-  return events;
+  return noted(day, events);
 }
 
 /** You've come to the lock: its call is answered. */
 export function answerLock(day: Day): DayEvent[] {
   const events: DayEvent[] = [];
   if (lockForYou(day.trip)) answered(day, 'lock', events);
-  return events;
+  return noted(day, events);
 }
 
 /** True while you can still choose a way: the boat hasn't reached the junction. */
@@ -149,15 +164,15 @@ export function canChooseWay(day: Day, plan: DayPlan): boolean {
 /** Choose which way to go at the junction, by its id. The boat carries on along it. */
 export function chooseWay(day: Day, plan: DayPlan, way: string): DayEvent[] {
   const next = plan.ways.find((w) => w.way === way);
-  if (!next || !canChooseWay(day, plan)) return [];
+  if (!next || !plan.fork || !canChooseWay(day, plan)) return [];
   const events: DayEvent[] = [];
   switchWay(day.trip, day.plan, next);
   day.plan = next;
   day.chosen = true;
   day.trip.hold = null;
-  events.push({ kind: 'chose-way', way });
+  events.push({ kind: 'chose-way', way, junction: plan.fork.name });
   answered(day, 'junction', events);
-  return events;
+  return noted(day, events);
 }
 
 /** Where the boat is on the water. */
@@ -209,7 +224,7 @@ export function chooseSpot(day: Day, index: number): DayEvent[] {
   day.glide = glide;
   answered(day, 'dusk', events);
   enter(day, 'tying-up', events);
-  return events;
+  return noted(day, events);
 }
 
 /** What the boat is waiting for you to do, if anything. */
@@ -264,7 +279,7 @@ export function stepDay(day: Day, plan: DayPlan, controls: Controls, dt: number)
 
   const open = day.calls.open;
   if (open && remind(day.calls, day.time)) events.push({ kind: 'call', call: open.kind, again: true });
-  return events;
+  return noted(day, events);
 }
 
 /**

@@ -209,7 +209,7 @@ describe('a call you ignore', () => {
     // The light doesn't go while the boat waits.
     expect(lightAt(day).dark).toBe(0);
 
-    expect(chooseWay(day, plan, 'main')).toEqual([{ kind: 'chose-way', way: 'main' }, { kind: 'answered', call: 'junction' }]);
+    expect(chooseWay(day, plan, 'main')).toEqual([{ kind: 'chose-way', way: 'main', junction: 'Wendle Junction' }, { kind: 'answered', call: 'junction' }]);
     expect(chooseWay(day, plan, 'arm')).toEqual([]);
     run(day, (d) => d.phase === 'dusk');
     expect(day.phase).toBe('dusk');
@@ -260,7 +260,7 @@ describe('choosing a way', () => {
     castOffDay(day);
     expect(canChooseWay(day, plan)).toBe(true);
     expect(chooseWay(day, plan, 'nowhere')).toEqual([]);
-    expect(chooseWay(day, plan, 'main')).toEqual([{ kind: 'chose-way', way: 'main' }]);
+    expect(chooseWay(day, plan, 'main')).toEqual([{ kind: 'chose-way', way: 'main', junction: 'Wendle Junction' }]);
     expect(canChooseWay(day, plan)).toBe(false);
     // Chosen early, the call never rings.
     const events = run(day, (d) => d.phase === 'dusk');
