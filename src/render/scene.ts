@@ -249,7 +249,7 @@ export class Scene {
    * only the narrow chamber.
    */
   private wakeRoom(stretch: Stretch): Room {
-    const canals = [...stretch.waterways.values(), ...stretch.ways.map((w) => w.route)];
+    const canals = [...stretch.waterways.values()];
     const basins = stretch.data.features.flatMap((f) => (f.kind === 'basin' ? [f.area] : []));
     const locks = this.locks.map((l) => l.pose);
     // Moored boats stop a wake as the bank does.
@@ -265,7 +265,12 @@ export class Scene {
       return Math.abs(ox * Math.cos(pose.angle) + oy * Math.sin(pose.angle)) < along && Math.abs(-ox * Math.sin(pose.angle) + oy * Math.cos(pose.angle)) < across;
     };
     return (x, y, dx, dy) => {
-      const canal = canals.reduce((best, t) => (distanceTo(t, [x, y]) < distanceTo(best, [x, y]) ? t : best));
+      let canal = canals[0];
+      let nearest = Infinity;
+      for (const t of canals) {
+        const d = distanceTo(t, [x, y]);
+        if (d < nearest) [canal, nearest] = [t, d];
+      }
       const isWater = (px: number, py: number) => {
         for (const pose of locks) if (within(pose, px, py, 122, 54)) return within(pose, px, py, 122, 9);
         if (moored.some((pose) => within(pose, px, py, 39, 6))) return false;

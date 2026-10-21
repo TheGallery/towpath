@@ -16,6 +16,8 @@ export interface Drizzle {
 export interface Weather {
   /** How thick the morning mist is, from 0 (none) to 1. */
   readonly mist: number;
+  /** How thick the mist that gathers at dawn is: the next morning's. */
+  readonly nextMist: number;
   readonly drizzle: Drizzle | null;
   /** Which way the wind carries the clouds, in radians, and how fast in world units a second. */
   readonly wind: number;
@@ -37,6 +39,14 @@ export type WeatherName = 'mist' | 'drizzle' | 'clear';
 
 /** A day's weather, the same every time for the same seed and day. */
 export function planWeather(seed: number, dayNumber: number, asked: WeatherName | null = null): Weather {
+  const { mist, drizzle, wind, windSpeed } = rollWeather(seed, dayNumber);
+  const nextMist = askedMist(rollWeather(seed, dayNumber + 1).mist, asked);
+  if (asked === 'drizzle') return { mist: 0, nextMist, drizzle: { from: 0, to: Infinity }, wind, windSpeed };
+  if (asked) return { mist: askedMist(mist, asked), nextMist, drizzle: null, wind, windSpeed };
+  return { mist, nextMist, drizzle, wind, windSpeed };
+}
+
+function rollWeather(seed: number, dayNumber: number): Omit<Weather, 'nextMist'> {
   const r = seededRandom((seed ^ 0x7ea7) + dayNumber * 7919);
   const misty = r() < 0.55;
   const mist = misty ? 0.6 + 0.4 * r() : 0;
@@ -45,16 +55,32 @@ export function planWeather(seed: number, dayNumber: number, asked: WeatherName 
   const drizzle = drizzly ? { from, to: from + 150 + 240 * r() } : null;
   const wind = r() * Math.PI * 2;
   const windSpeed = 2.5 + 2 * r();
-  if (asked === 'mist') return { mist: 1, drizzle: null, wind, windSpeed };
-  if (asked === 'drizzle') return { mist: 0, drizzle: { from: 0, to: Infinity }, wind, windSpeed };
-  if (asked === 'clear') return { mist: 0, drizzle: null, wind, windSpeed };
   return { mist, drizzle, wind, windSpeed };
+}
+
+function askedMist(mist: number, asked: WeatherName | null): number {
+  if (asked === 'mist') return 1;
+  return asked ? 0 : mist;
+}
+
+/** How hard a spell drizzles, so many seconds after casting off. */
+function spellAt(spell: Drizzle, t: number): number {
+  return smoothstep(spell.from, spell.from + DRIZZLE_FADE, t) * (spell.to === Infinity ? 1 : 1 - smoothstep(spell.to - DRIZZLE_FADE, spell.to, t));
+}
+
+/** A spell still going when the boat arrives clears gently from where it was: when it set out and arrived come from the logbook. */
+function clearingAfter(day: Day, spell: Drizzle): number {
+  const setOut = day.log.entries.find((e) => e.kind === 'set-out')?.at;
+  const arrived = day.log.waiting.dusk;
+  if (setOut === undefined || arrived === undefined) return 0;
+  return spellAt(spell, arrived - setOut) * (1 - smoothstep(0, DRIZZLE_FADE, day.time - arrived));
 }
 
 /**
  * How misty and drizzly it is at this point in the day. The mist lies over
- * the morning, lifts after you cast off, and gathers again at dawn. Drizzle
- * comes and goes while the boat is underway; a spell that lasts all day
+ * the morning, lifts after you cast off, and gathers again at dawn as thick
+ * as the next morning's. Drizzle comes and goes while the boat is underway; a
+ * spell still going when it arrives clears gently, and one that lasts all day
  * carries on until the evening.
  */
 export function weatherAt(day: Day, weather: Weather): WeatherNow {
@@ -62,29 +88,32 @@ export function weatherAt(day: Day, weather: Weather): WeatherNow {
   let mist = 0;
   let drizzle = 0;
   const spell = weather.drizzle;
+  const allDay = spell !== null && spell.to === Infinity;
   switch (day.phase) {
     case 'morning':
-    case 'over':
-      mist = 1;
+      mist = weather.mist;
       break;
     case 'underway':
-      mist = 1 - smoothstep(0, MIST_LIFT, t);
-      if (spell) drizzle = smoothstep(spell.from, spell.from + DRIZZLE_FADE, t) * (spell.to === Infinity ? 1 : 1 - smoothstep(spell.to - DRIZZLE_FADE, spell.to, t));
+      mist = (1 - smoothstep(0, MIST_LIFT, t)) * weather.mist;
+      if (spell) drizzle = spellAt(spell, t);
       break;
     case 'dusk':
     case 'tying-up':
-      if (spell && spell.to === Infinity) drizzle = 1;
+      if (spell) drizzle = allDay ? 1 : clearingAfter(day, spell);
       break;
     case 'evening':
-      if (spell && spell.to === Infinity) drizzle = 1 - smoothstep(0, EVENING_TIME / 2, t);
+      if (spell) drizzle = allDay ? 1 - smoothstep(0, EVENING_TIME / 2, t) : clearingAfter(day, spell);
       break;
     case 'dawn':
-      mist = smoothstep(0, DAWN_TIME, t);
+      mist = smoothstep(0, DAWN_TIME, t) * weather.nextMist;
+      break;
+    case 'over':
+      mist = weather.nextMist;
       break;
     case 'night':
       break;
   }
-  return { mist: clamp(mist * weather.mist, 0, 1), drizzle: clamp(drizzle, 0, 1) };
+  return { mist: clamp(mist, 0, 1), drizzle: clamp(drizzle, 0, 1) };
 }
 
 /** One cloud: where it is in the sky's repeating square at the start of the day, and its shape. */

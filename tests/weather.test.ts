@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { castOffDay, chooseSpot, chooseWay, newDay, planDay, stepDay } from '../src/sim/day';
+import { DAWN_TIME, castOffDay, chooseSpot, chooseWay, newDay, planDay, stepDay } from '../src/sim/day';
 import type { Day, DayPhase } from '../src/sim/day';
 import { NO_CONTROLS } from '../src/sim/trip';
 import { DRIZZLE_FADE, MIST_LIFT, SKY_REPEAT, cloudAt, planClouds, planWeather, weatherAt } from '../src/sim/weather';
@@ -47,7 +47,7 @@ describe("the day's weather", () => {
 });
 
 describe('how the weather looks through the day', () => {
-  const misty = { ...planWeather(HALLAM.seed, 1), mist: 0.8, drizzle: { from: 200, to: 500 } };
+  const misty = { ...planWeather(HALLAM.seed, 1), mist: 0.8, nextMist: 0.8, drizzle: { from: 200, to: 500 } };
 
   it('lies misty over the morning, and the mist lifts after casting off', () => {
     expect(weatherAt(at('morning', 400), misty).mist).toBeCloseTo(0.8);
@@ -74,12 +74,43 @@ describe('how the weather looks through the day', () => {
     expect(weatherAt(at('dusk', 10), misty).drizzle).toBe(0);
   });
 
+  it('clears gently from where it was when the boat arrives part way through a spell', () => {
+    const arrivedAfter = (underway: number, since: number, phase: DayPhase = 'dusk'): Day => {
+      const day = at(phase, since);
+      day.log.entries.push({ kind: 'set-out', at: 100, from: 'here', along: 'canal' });
+      day.log.waiting.dusk = 100 + underway;
+      day.time = 100 + underway + since;
+      return day;
+    };
+    expect(weatherAt(arrivedAfter(350, 0), misty).drizzle).toBe(1);
+    expect(weatherAt(arrivedAfter(350, DRIZZLE_FADE / 2), misty).drizzle).toBeCloseTo(0.5);
+    expect(weatherAt(arrivedAfter(350, DRIZZLE_FADE / 2, 'tying-up'), misty).drizzle).toBeCloseTo(0.5);
+    expect(weatherAt(arrivedAfter(350, DRIZZLE_FADE / 2, 'evening'), misty).drizzle).toBeCloseTo(0.5);
+    expect(weatherAt(arrivedAfter(350, DRIZZLE_FADE), misty).drizzle).toBe(0);
+    expect(weatherAt(arrivedAfter(200 + DRIZZLE_FADE / 2, 0), misty).drizzle).toBeCloseTo(0.5);
+    expect(weatherAt(arrivedAfter(150, 0), misty).drizzle).toBe(0);
+  });
+
   it('keeps drizzling to the evening when asked to drizzle all day', () => {
     const wet = planWeather(HALLAM.seed, 1, 'drizzle');
     expect(weatherAt(at('underway', 10), wet).drizzle).toBeGreaterThan(0);
     expect(weatherAt(at('underway', 3000), wet).drizzle).toBe(1);
     expect(weatherAt(at('dusk', 10), wet).drizzle).toBe(1);
     expect(weatherAt(at('evening', 60), wet).drizzle).toBe(0);
+  });
+
+  it('gathers at dawn as thick as the next morning, so starting the next day keeps the same mist', () => {
+    for (const asked of [null, 'mist', 'clear'] as const) {
+      for (let n = 1; n <= 40; n++) {
+        const today = planWeather(HALLAM.seed, n, asked);
+        const tomorrow = planWeather(HALLAM.seed, n + 1, asked);
+        const next = { ...newDay(plan, { number: n + 1 }), phase: 'morning' as const };
+        expect(weatherAt(at('dawn', DAWN_TIME), today).mist).toBeCloseTo(weatherAt(next, tomorrow).mist);
+        expect(weatherAt(at('over', 0), today).mist).toBe(weatherAt(next, tomorrow).mist);
+        castOffDay(next);
+        expect(weatherAt(next, tomorrow).mist).toBe(weatherAt(at('over', 0), today).mist);
+      }
+    }
   });
 
   it('stays between 0 and 1 through a whole day', () => {
