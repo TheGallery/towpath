@@ -5,7 +5,7 @@
 
 import { buildTrack, distanceTo, nearestDistance, poseAt } from '../core/track';
 import type { Point, Track } from '../core/track';
-import { BOAT_LENGTH } from './dimensions';
+import { BOAT_LENGTH, MOORED_OFFSET } from './dimensions';
 
 export interface WaterwayData {
   readonly id: string;
@@ -70,13 +70,48 @@ export interface MooringsData extends FeatureBase {
   readonly boats: readonly MooredBoatData[];
 }
 
+/** A place in a basin to tie up for the night, placed freely. */
+export interface BasinSpotData {
+  readonly name: string;
+  readonly at: Point;
+  readonly angle: number;
+}
+
 export interface BasinData extends FeatureBase {
   readonly kind: 'basin';
   readonly area: { readonly x: number; readonly y: number; readonly width: number; readonly height: number };
   readonly boats: readonly BasinBoatData[];
+  /** What it's like to moor here, in a few words. */
+  readonly about: string;
+  readonly spots: readonly BasinSpotData[];
 }
 
-export type FeatureData = BridgeData | FootbridgeData | LockData | MooringsData | BasinData;
+/** A place on a bank to tie up for the night, by distance along the canal. */
+export interface BankSpotData {
+  readonly name: string;
+  readonly at: number;
+}
+
+/** A stretch of towpath bank with mooring rings, where a boat can stop for the night. */
+export interface BankData extends FeatureBase {
+  readonly kind: 'bank';
+  readonly about: string;
+  /** Where boats tie up, ahead of where they arrive at the bank's `at`. */
+  readonly spots: readonly BankSpotData[];
+}
+
+export type FeatureData = BridgeData | FootbridgeData | LockData | MooringsData | BasinData | BankData;
+
+/** A feature a day can end at, mooring for the night. */
+export type MooringData = BasinData | BankData;
+
+/** One way the day can go: the waterways it follows, each a branch of the one before, and where it moors. */
+export interface WayData {
+  readonly id: string;
+  readonly route: readonly string[];
+  /** The mooring the way ends at. */
+  readonly to: string;
+}
 
 export interface AreaData {
   readonly name: string;
@@ -123,10 +158,8 @@ export interface StretchData {
   readonly trip: {
     /** Where the boat starts the day, moored. */
     readonly from: { readonly name: string; readonly waterway: string; readonly at: number };
-    /** The waterways the trip follows, each a branch of the one before. */
-    readonly route: readonly string[];
-    /** The feature the trip ends at. */
-    readonly to: string;
+    /** The ways the day can go, which part at a junction. The boat follows the first until you choose. */
+    readonly ways: readonly WayData[];
   };
 }
 
@@ -139,22 +172,45 @@ export interface RouteFeature {
 export interface Junction {
   readonly name: string;
   readonly point: Point;
-  /** Distance along the route, where the route turns onto the branch. */
+  /** Distance along the route, where the branch leaves it. */
   readonly s: number;
   readonly branch: WaterwayData;
+  /** True if the route turns onto the branch, false if it carries straight on. */
+  readonly turns: boolean;
 }
 
-/** A stretch ready to play: every curve built and every feature placed on the route. */
+/** A place to tie up for the night, where the boat lies when moored there. */
+export interface Spot {
+  readonly name: string;
+  readonly x: number;
+  readonly y: number;
+  readonly angle: number;
+}
+
+/** One way the day can go, ready to play. */
+export interface Way {
+  readonly id: string;
+  /** The ids of the waterways it follows. */
+  readonly follows: readonly string[];
+  /** The path the boat follows. */
+  readonly route: Track;
+  readonly onRoute: readonly RouteFeature[];
+  /** Every junction the route passes, whether it turns there or not. */
+  readonly junctions: readonly Junction[];
+  /** Where the boat arrives at the mooring. */
+  readonly end: number;
+  readonly mooring: MooringData;
+  readonly spots: readonly Spot[];
+}
+
+/** A stretch ready to play: every curve built, and every feature placed along each way. */
 export interface Stretch {
   readonly data: StretchData;
   readonly waterways: ReadonlyMap<string, Track>;
   readonly roads: ReadonlyMap<string, Track>;
-  /** The path the boat follows through the day. */
-  readonly route: Track;
-  readonly onRoute: readonly RouteFeature[];
-  readonly junctions: readonly Junction[];
+  readonly ways: readonly Way[];
+  /** Where the day begins, the same distance along every way. */
   readonly start: number;
-  readonly end: number;
 }
 
 /** How near a feature must be to the route's curve to count as on it. */
@@ -183,9 +239,9 @@ function findWaterway(data: StretchData, id: string): WaterwayData {
   return found;
 }
 
-/** The route's points: along the first waterway, then into each branch where it leaves. */
-function routePoints(data: StretchData): Point[] {
-  const [first, ...rest] = data.trip.route.map((id) => findWaterway(data, id));
+/** A way's points: along the first waterway, then into each branch where it leaves. */
+function routePoints(data: StretchData, way: WayData): Point[] {
+  const [first, ...rest] = way.route.map((id) => findWaterway(data, id));
   let points = waterwayCurve(data, first).points;
   // Where the current waterway's own points begin in `points`.
   let ownStart = first.leaves ? 1 : 0;
@@ -200,13 +256,24 @@ function routePoints(data: StretchData): Point[] {
   return points;
 }
 
-/** Where a place on a waterway falls along the route, or null if the route doesn't pass it. */
-export function routeDistance(stretch: Pick<Stretch, 'data' | 'waterways' | 'route'>, waterway: string, at: number): number | null {
+/** Where a place on a waterway falls along a way, or null if the way doesn't pass it. */
+export function routeDistance(stretch: Pick<Stretch, 'waterways'>, way: Pick<Way, 'follows' | 'route'>, waterway: string, at: number): number | null {
   const track = stretch.waterways.get(waterway);
-  if (!track || !stretch.data.trip.route.includes(waterway)) return null;
+  if (!track || !way.follows.includes(waterway)) return null;
   const p = poseAt(track, at);
   const point: Point = [p.x, p.y];
-  return distanceTo(stretch.route, point) <= ON_ROUTE ? nearestDistance(stretch.route, point) : null;
+  return distanceTo(way.route, point) <= ON_ROUTE ? nearestDistance(way.route, point) : null;
+}
+
+/** Where the boat lies at each spot of a mooring. */
+function spotsAt(waterways: ReadonlyMap<string, Track>, mooring: MooringData): Spot[] {
+  if (mooring.kind === 'basin') return mooring.spots.map((s) => ({ name: s.name, x: s.at[0], y: s.at[1], angle: s.angle }));
+  const track = waterways.get(mooring.waterway);
+  if (!track) return [];
+  return mooring.spots.map((s) => {
+    const p = poseAt(track, s.at, MOORED_OFFSET);
+    return { name: s.name, x: p.x, y: p.y, angle: p.angle };
+  });
 }
 
 export function resolveStretch(data: StretchData): Stretch {
@@ -215,30 +282,38 @@ export function resolveStretch(data: StretchData): Stretch {
 
   const waterways = new Map(data.waterways.map((w) => [w.id, curveTrack(data, w)]));
   const roads = new Map(data.roads.map((r) => [r.id, buildTrack(r.points, 10)]));
-  const first = findWaterway(data, data.trip.route[0]);
-  const route = buildTrack(routePoints(data), 5, waterwayCurve(data, first).before);
 
-  const toRoute = (waterway: string, at: number) => routeDistance({ data, waterways, route }, waterway, at);
+  const ways = data.trip.ways.map((w): Way => {
+    const first = findWaterway(data, w.route[0]);
+    const route = buildTrack(routePoints(data, w), 5, waterwayCurve(data, first).before);
+    const place = { follows: w.route, route };
 
-  const onRoute: RouteFeature[] = [];
-  for (const feature of data.features) {
-    const s = toRoute(feature.waterway, feature.at);
-    if (s !== null) onRoute.push({ feature, s });
-  }
-  onRoute.sort((a, b) => a.s - b.s);
+    const onRoute: RouteFeature[] = [];
+    for (const feature of data.features) {
+      const s = routeDistance({ waterways }, place, feature.waterway, feature.at);
+      if (s !== null) onRoute.push({ feature, s });
+    }
+    onRoute.sort((a, b) => a.s - b.s);
 
-  const junctions: Junction[] = [];
-  for (const id of data.trip.route) {
-    const branch = findWaterway(data, id);
-    if (!branch.leaves) continue;
-    const point = waterwayCurve(data, branch).points[0];
-    junctions.push({ name: branch.leaves.junction, point, s: nearestDistance(route, point), branch });
-  }
+    // Every branch leaving a waterway the way follows, where the way passes it.
+    const junctions: Junction[] = [];
+    for (const branch of data.waterways) {
+      if (!branch.leaves || !w.route.includes(branch.leaves.waterway)) continue;
+      const point = waterwayCurve(data, branch).points[0];
+      if (distanceTo(route, point) > ON_ROUTE) continue;
+      junctions.push({ name: branch.leaves.junction, point, s: nearestDistance(route, point), branch, turns: w.route.includes(branch.id) });
+    }
+    junctions.sort((a, b) => a.s - b.s);
 
-  const start = toRoute(data.trip.from.waterway, data.trip.from.at);
-  const endFeature = onRoute.find((f) => f.feature.id === data.trip.to);
-  if (start === null || !endFeature) throw new Error(`The trip on ${data.id} does not start and end on its route`);
-  return { data, waterways, roads, route, onRoute, junctions, start, end: Math.min(endFeature.s, route.length) };
+    const end = onRoute.find((f) => f.feature.id === w.to);
+    if (end?.feature.kind !== 'basin' && end?.feature.kind !== 'bank') throw new Error(`The way ${w.id} on ${data.id} does not end at a mooring on its route`);
+    return { id: w.id, follows: w.route, route, onRoute, junctions, end: Math.min(end.s, route.length), mooring: end.feature, spots: spotsAt(waterways, end.feature) };
+  });
+
+  const starts = ways.map((w) => routeDistance({ waterways }, w, data.trip.from.waterway, data.trip.from.at));
+  const start = starts[0];
+  if (start === null || start === undefined || starts.some((s) => s === null || Math.abs(s - start) > 1)) throw new Error(`The day on ${data.id} does not start on every way`);
+  return { data, waterways, roads, ways, start };
 }
 
 /** Everything wrong with a stretch's data, in plain words. Empty when it's sound. */
@@ -266,6 +341,7 @@ export function checkStretch(data: StretchData): string[] {
     const length = lengths.get(f.waterway);
     if (length === undefined) problems.push(`${f.id} is on ${f.waterway}, which doesn't exist`);
     else if (f.at < 0 || f.at > length + 0.5) problems.push(`${f.id} is ${Math.round(f.at)} along ${f.waterway}, which is only ${Math.round(length)} long`);
+    if (f.kind === 'bank' && length !== undefined && f.spots.some((s) => s.at > length)) problems.push(`a spot at ${f.id} is beyond the end of ${f.waterway}`);
     if (f.kind === 'bridge' && !roadIds.has(f.road)) problems.push(`${f.id} carries ${f.road}, which doesn't exist`);
     if (f.kind === 'moorings') {
       const ats = f.boats.map((b) => b.at).sort((a, b) => a - b);
@@ -286,8 +362,36 @@ export function checkStretch(data: StretchData): string[] {
     }
   }
 
-  for (const id of data.trip.route) if (!waterwayIds.has(id)) problems.push(`the trip follows ${id}, which doesn't exist`);
-  if (!ids.includes(data.trip.to)) problems.push(`the trip ends at ${data.trip.to}, which doesn't exist`);
-  if (!data.trip.route.includes(data.trip.from.waterway)) problems.push('the trip starts off its route');
+  if (data.trip.ways.length === 0) problems.push('the trip has no way to go');
+  for (const way of data.trip.ways) {
+    for (const id of way.route) if (!waterwayIds.has(id)) problems.push(`the way ${way.id} follows ${id}, which doesn't exist`);
+    const to = data.features.find((f) => f.id === way.to);
+    if (!to) problems.push(`the way ${way.id} ends at ${way.to}, which doesn't exist`);
+    else if (to.kind !== 'basin' && to.kind !== 'bank') problems.push(`the way ${way.id} ends at ${way.to}, which isn't a place to moor`);
+    if (way.route[0] !== data.trip.from.waterway) problems.push(`the way ${way.id} starts off the waterway the day begins on`);
+  }
+
+  // Spots to moor at keep clear of each other, and of the boats already there.
+  for (const f of data.features) {
+    if (f.kind === 'basin') {
+      const a = f.area;
+      const points = [...f.spots.map((s) => s.at), ...f.boats.map((b) => b.at)];
+      for (const s of f.spots) {
+        if (s.at[0] < a.x || s.at[0] > a.x + a.width || s.at[1] < a.y || s.at[1] > a.y + a.height) problems.push(`the spot ${s.name} at ${f.id} is outside the basin`);
+      }
+      for (let i = 0; i < f.spots.length; i++) {
+        for (let j = i + 1; j < points.length; j++) {
+          const [p, q] = [points[i], points[j]];
+          if (Math.hypot(p[0] - q[0], p[1] - q[1]) < BOAT_LENGTH / 2 + 20) problems.push(`the spot ${f.spots[i].name} at ${f.id} is too close to another boat`);
+        }
+      }
+    }
+    if (f.kind === 'bank') {
+      const ats = f.spots.map((s) => s.at).sort((a, b) => a - b);
+      if (ats[0] < f.at + BOAT_LENGTH / 2) problems.push(`the first spot at ${f.id} is behind where a boat arrives`);
+      for (let i = 1; i < ats.length; i++) if (ats[i] - ats[i - 1] < BOAT_LENGTH + 10) problems.push(`two spots at ${f.id} overlap`);
+    }
+    if ((f.kind === 'basin' || f.kind === 'bank') && f.spots.length === 0) problems.push(`${f.id} has nowhere to moor`);
+  }
   return problems;
 }

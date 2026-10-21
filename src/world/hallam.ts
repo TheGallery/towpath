@@ -1,7 +1,9 @@
 // The prototype's one hand-made stretch. West to east the Hallam Canal climbs
-// through Brook Lock to Wendle Junction, where the trip turns right down the
-// Wendle Arm to a basin beside The Navigation pub. Distances are in world
-// units along each canal; at cruising speed the trip takes about 15 minutes.
+// through Brook Lock to Wendle Junction. There the day goes one of two ways:
+// right down the Wendle Arm to a basin beside The Navigation pub, or straight
+// on along the main line to a quiet bank by Coppice Wood. Distances are in
+// world units along each canal; at cruising speed either way takes about 15
+// minutes.
 
 import type { StretchData } from './stretch';
 
@@ -62,10 +64,30 @@ export const HALLAM: StretchData = {
         { at: [4010, 2595], angle: 0, livery: 4 },
         { at: [4128, 2650], angle: Math.PI / 2, livery: 5 },
       ],
+      about: 'by The Navigation pub',
+      spots: [
+        { name: 'By the pub garden', at: [3842, 2724], angle: 0 },
+        { name: 'Along the south wall', at: [3966, 2724], angle: 0 },
+        { name: 'In the far corner', at: [4086, 2726], angle: 0 },
+      ],
+    },
+    {
+      kind: 'bank',
+      id: 'coppice-bank',
+      name: 'Coppice Wood bank',
+      waterway: 'hallam',
+      at: 5045,
+      labelSide: 1,
+      about: 'a quiet bank by the wood',
+      spots: [
+        { name: 'Under the oaks', at: 5120 },
+        { name: 'By the bench', at: 5230 },
+        { name: 'At the far end, looking over the fields', at: 5345 },
+      ],
     },
   ],
   woods: [
-    { name: 'Coppice Wood', centre: [4620, 2128], radius: [462, 308] },
+    { name: 'Coppice Wood', centre: [4760, 1420], radius: [430, 250] },
     { name: 'Long Spinney', centre: [1344, 1204], radius: [532, 210] },
     { name: 'Hob Wood', centre: [5040, 2772], radius: [280, 196] },
   ],
@@ -79,7 +101,9 @@ export const HALLAM: StretchData = {
   ],
   trip: {
     from: { name: 'Kingsbridge', waterway: 'hallam', at: 322 },
-    route: ['hallam', 'wendle-arm'],
-    to: 'wendle-basin',
+    ways: [
+      { id: 'arm', route: ['hallam', 'wendle-arm'], to: 'wendle-basin' },
+      { id: 'main', route: ['hallam'], to: 'coppice-bank' },
+    ],
   },
 };

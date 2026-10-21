@@ -82,7 +82,7 @@ describe('the plan for the Hallam trip', () => {
     expect(plan.locks.map((l) => [l.name, l.goingUp])).toEqual([['Brook Lock', true]]);
     expect(plan.moorings.map((m) => m.name)).toEqual(['Visitor moorings']);
     expect(plan.obstacles).toHaveLength(3);
-    expect(plan.junctions.map((j) => [j.name, j.branch, j.turn])).toEqual([['Wendle Junction', 'Wendle Arm', 'right']]);
+    expect(plan.junctions.map((j) => [j.name, j.onto, j.turn])).toEqual([['Wendle Junction', 'Wendle Arm', 'right']]);
     expect(plan.startName).toBe('Kingsbridge');
     expect(plan.endName).toBe('Wendle Basin');
   });
@@ -406,5 +406,5 @@ describe('what the game says', () => {
 });
 
 function poseAtRoute(t: Trip): { x: number; y: number } {
-  return poseAt(stretch.route, t.boat.s, t.boat.d);
+  return poseAt(plan.route, t.boat.s, t.boat.d);
 }

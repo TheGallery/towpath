@@ -368,7 +368,7 @@ button:focus-visible {
 
 /* ---- Working the lock -------------------------------------------------- */
 
-.work-button {
+.call-button {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -376,15 +376,26 @@ button:focus-visible {
   font-size: 15px;
 }
 
-.work-button kbd {
+.call-button kbd {
   margin: 0;
 }
 
-.lock-panel {
+.call-panel {
   padding: 8px;
+  text-align: center;
 }
 
-.lock-panel[hidden] {
+.call-panel[hidden] {
+  display: none;
+}
+
+.waited {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.waited[hidden] {
   display: none;
 }
 
@@ -569,6 +580,150 @@ button:focus-visible {
   animation: glow-pulse 1.3s ease-in-out infinite;
 }
 
+/* ---- The boat's calls: choosing a way, and a spot to moor --------------- */
+
+.bell-button {
+  gap: 6px;
+  padding: 9px 14px;
+  background: rgb(43 58 63 / 0.82);
+  font-size: 13px;
+}
+
+.bell-button[aria-pressed='false'] {
+  background: rgb(43 58 63 / 0.55);
+}
+
+.bell-button[aria-pressed='false'] span {
+  opacity: 0.6;
+  text-decoration: line-through;
+}
+
+/* Messages move up out of the way while you choose. */
+.game:has(.choice-panel:not([hidden])) .toast {
+  top: 96px;
+  bottom: auto;
+}
+
+.choice-panel {
+  position: absolute;
+  z-index: 5;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  width: min(30rem, calc(100% - 32px));
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.choice-panel[hidden] {
+  display: none;
+}
+
+.choice-title {
+  font: 700 19px/1.25 var(--serif);
+}
+
+.choice-options {
+  display: grid;
+  gap: 8px;
+}
+
+.choice-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border: 1px solid var(--paper-edge);
+  border-radius: 12px;
+  padding: 10px 14px;
+  background: #fffaf0;
+  color: var(--ink);
+  text-align: left;
+}
+
+.choice-option:hover {
+  border-color: var(--accent);
+  background: #fff;
+}
+
+.choice-option kbd {
+  flex: none;
+  margin: 0;
+}
+
+.choice-option span {
+  display: grid;
+  gap: 2px;
+}
+
+.choice-option strong {
+  font-size: 15px;
+}
+
+.choice-option small {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Above the steering and trip panels, which the choice covers. */
+.game:has(.choice-panel:not([hidden])) .hud-bottom {
+  visibility: hidden;
+}
+
+.way-choice {
+  cursor: pointer;
+}
+
+.way-line {
+  stroke: #2f4f86;
+}
+
+.way-1 .way-line {
+  stroke: #2f6b4a;
+}
+
+.way-choice:hover .way-line {
+  stroke-opacity: 0.7;
+}
+
+.map-label.choice-label {
+  font-weight: 700;
+  fill: #2f4f86;
+}
+
+.way-1 .map-label.choice-label {
+  fill: #2f6b4a;
+}
+
+.spot-mark {
+  cursor: pointer;
+}
+
+.spot-outline {
+  fill: rgb(255 246 184 / 0.18);
+  stroke: #fff6b8;
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  filter: drop-shadow(0 0 2px #ffcf3a);
+}
+
+.spot-mark:hover .spot-outline {
+  fill: rgb(255 246 184 / 0.4);
+}
+
+.spot-badge {
+  fill: var(--ink);
+  stroke: #fff6b8;
+  stroke-width: 2;
+}
+
+.spot-number {
+  font: 700 10px var(--sans);
+  fill: #fff6b8;
+  pointer-events: none;
+}
+
 /* ---- Names on the map, drawn in the SVG -------------------------------- */
 
 .map-label {
@@ -637,7 +792,8 @@ button:focus-visible {
     font-size: 14px;
   }
 
-  .map-button kbd {
+  .map-button kbd,
+  .bell-text {
     display: none;
   }
 
@@ -656,11 +812,11 @@ button:focus-visible {
   }
 
   /* Above the steering and trip panels, where there's no room between them, with any message above it. */
-  .game:has(.lock-panel:not([hidden])) .toast {
+  .game:has(.call-panel:not([hidden])) .toast {
     bottom: 164px;
   }
 
-  .lock-panel {
+  .call-panel {
     position: absolute;
     left: 50%;
     bottom: calc(100% + 8px);
