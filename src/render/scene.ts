@@ -1,24 +1,28 @@
 // The game's SVG: the painted world drawn once, the moving parts updated each
 // frame, the light of the day over it, and the map's names and route on top.
 
-import { poseAt } from '../core/track';
+import { distanceTo, poseAt } from '../core/track';
 import type { Point, Pose, Track } from '../core/track';
-import { TOP_SPEED } from '../sim/boat';
 import type { LockState, Part } from '../sim/lock';
 import { otherPose } from '../sim/otherboat';
 import type { OtherBoatPlan } from '../sim/otherboat';
 import type { Light, Placed } from '../sim/day';
+import type { Weather, WeatherNow } from '../sim/weather';
 import type { Trip } from '../sim/trip';
 import { dogAt, walkerAt } from '../sim/walkers';
 import type { Walker } from '../sim/walkers';
+import { CANAL_WIDTH, MOORED_OFFSET } from '../world/dimensions';
 import type { Spot, Stretch } from '../world/stretch';
 import type { TowpathRun } from '../world/towpath';
 import type { View } from '../view/camera';
-import { WAKE_PATH, boatMarkup, dogMarkup, personMarkup } from './figures';
+import { Ambience } from './ambience';
+import { boatMarkup, dogMarkup, personMarkup } from './figures';
 import { COLOURS, DOG_COATS, HEADS, JOGGER_TOPS, OTHER_BOAT, WALKER_COATS, YOUR_BOAT, mixHex, pick } from './palette';
 import { lockPose } from './scenery';
 import type { Scenery } from './scenery';
 import { element, f1, offsetPath, transformFor } from './svg';
+import { Wake } from './wake';
+import type { Room } from './wake';
 
 interface LockParts {
   readonly id: string;
@@ -76,6 +80,10 @@ export interface Frame {
   readonly light: Light;
   /** Spots to tie up at, marked while you choose one. */
   readonly spots: readonly Spot[] | null;
+  /** Today's route, the day's weather, and how it looks right now. */
+  readonly route: Track;
+  readonly weather: Weather;
+  readonly weatherNow: WeatherNow;
 }
 
 /** How far the bottom gates swing, and the top gate, in degrees from open. */
@@ -87,6 +95,10 @@ const PERSON_SCALE = 1.7;
 const DOG_SCALE = 1.4;
 const FADE = 16;
 
+/** The widest a wake spreads from the boat's stern, and the step it feels for the bank in. */
+const WAKE_ROOM = 24;
+const ROOM_STEP = 2;
+
 /** Labels and lines on the map are drawn at these sizes on screen, in pixels. */
 const LABEL_PX = 12.5;
 const LABEL_PX_SMALL = 10.5;
@@ -95,9 +107,10 @@ export class Scene {
   readonly svg: SVGSVGElement;
   private readonly locks: LockParts[] = [];
   private readonly boat: SVGGElement;
-  private readonly wake: SVGPathElement;
+  private readonly wake: Wake;
   private readonly other: SVGGElement;
-  private readonly otherWake: SVGPathElement;
+  private readonly otherWake: Wake;
+  private readonly ambience: Ambience;
   private readonly focus: SVGGElement;
   private readonly figures: Figure[] = [];
   private readonly mapLayer: SVGGElement;
@@ -135,8 +148,11 @@ export class Scene {
     this.svg = svg;
     element('defs', {}, svg).innerHTML = scenery.defs;
     element('g', {}, svg).innerHTML = scenery.base;
+    // Sheep and cows in the meadows, then the life on the water under the boats.
+    const ground = element('g', { 'pointer-events': 'none' }, svg);
 
     const moving = element('g', {}, svg);
+    const water = element('g', { 'pointer-events': 'none' }, moving);
     for (const f of stretch.data.features) {
       if (f.kind !== 'lock') continue;
       const pose = lockPose(stretch, f);
@@ -173,14 +189,18 @@ export class Scene {
       body.innerHTML = personMarkup(walker.kind === 'jogger' ? pick(JOGGER_TOPS, walker.look) : pick(WALKER_COATS, walker.look), pick(HEADS, walker.look >> 2));
       this.figures.push({ walker, person, feet, dog });
     }
-    this.otherWake = element('path', { d: WAKE_PATH, stroke: '#eaf7fb', 'stroke-width': 1.6, fill: 'none', 'stroke-linecap': 'round' }, moving);
     this.other = element('g', { display: 'none' }, moving);
     this.other.innerHTML = boatMarkup(OTHER_BOAT, OTHER_BOAT.steerer);
-    this.wake = element('path', { d: WAKE_PATH, stroke: '#eaf7fb', 'stroke-width': 1.6, fill: 'none', 'stroke-linecap': 'round' }, moving);
     this.boat = element('g', {}, moving);
     this.boat.innerHTML = boatMarkup(YOUR_BOAT, YOUR_BOAT.steerer);
+    const room = this.wakeRoom(stretch);
+    this.otherWake = new Wake(moving, this.other, room);
+    this.wake = new Wake(moving, this.boat, room);
 
     element('g', {}, svg).innerHTML = scenery.top;
+    // Cloud shadows, mist and drizzle lie over everything, under the light of the day.
+    const sky = element('g', { 'pointer-events': 'none' }, svg);
+    this.ambience = new Ambience(stretch, scenery.herds, stretch.data.seed, { ground, water, sky });
 
     // The light of the day: a warm wash at morning and dusk, the dark of
     // night, and the windows that glow through it.
@@ -188,6 +208,10 @@ export class Scene {
     element('stop', { offset: 0, 'stop-color': '#ffe3a1', 'stop-opacity': 0.95 }, lampGlow);
     element('stop', { offset: 0.3, 'stop-color': '#ffbf5e', 'stop-opacity': 0.5 }, lampGlow);
     element('stop', { offset: 1, 'stop-color': '#ffbf5e', 'stop-opacity': 0 }, lampGlow);
+    const mist = element('radialGradient', { id: 'tp-mist' }, svg.querySelector('defs') ?? svg);
+    element('stop', { offset: 0, 'stop-color': '#f1f3ef', 'stop-opacity': 0.75 }, mist);
+    element('stop', { offset: 0.6, 'stop-color': '#f1f3ef', 'stop-opacity': 0.4 }, mist);
+    element('stop', { offset: 1, 'stop-color': '#f1f3ef', 'stop-opacity': 0 }, mist);
     this.night = element('g', { class: 'night', 'pointer-events': 'none', display: 'none' }, svg);
     const far = { x: -stretch.data.size.width * 2, y: -stretch.data.size.height * 4, width: stretch.data.size.width * 5, height: stretch.data.size.height * 9 };
     this.warm = element('rect', { ...far, fill: '#f08c3c', opacity: 0 }, this.night);
@@ -217,6 +241,45 @@ export class Scene {
     element('text', { x: 0, y: -14, 'text-anchor': 'middle', class: 'map-label here' }, this.marker).textContent = 'You are here';
 
     container.prepend(svg);
+  }
+
+  /**
+   * How much open water there is from a point, feeling one way for the bank:
+   * along the canal and in the basin it's the canal's width, and in a lock
+   * only the narrow chamber.
+   */
+  private wakeRoom(stretch: Stretch): Room {
+    const canals = [...stretch.waterways.values()];
+    const basins = stretch.data.features.flatMap((f) => (f.kind === 'basin' ? [f.area] : []));
+    const locks = this.locks.map((l) => l.pose);
+    // Moored boats stop a wake as the bank does.
+    const moored: { x: number; y: number; angle: number }[] = [];
+    for (const f of stretch.data.features) {
+      const track = stretch.waterways.get(f.waterway);
+      if (f.kind === 'moorings' && track) for (const b of f.boats) moored.push(poseAt(track, b.at, MOORED_OFFSET));
+      if (f.kind === 'basin') for (const b of f.boats) moored.push({ x: b.at[0], y: b.at[1], angle: b.angle });
+    }
+    const within = (pose: { x: number; y: number; angle: number }, px: number, py: number, along: number, across: number) => {
+      const ox = px - pose.x;
+      const oy = py - pose.y;
+      return Math.abs(ox * Math.cos(pose.angle) + oy * Math.sin(pose.angle)) < along && Math.abs(-ox * Math.sin(pose.angle) + oy * Math.cos(pose.angle)) < across;
+    };
+    return (x, y, dx, dy) => {
+      let canal = canals[0];
+      let nearest = Infinity;
+      for (const t of canals) {
+        const d = distanceTo(t, [x, y]);
+        if (d < nearest) [canal, nearest] = [t, d];
+      }
+      const isWater = (px: number, py: number) => {
+        for (const pose of locks) if (within(pose, px, py, 122, 54)) return within(pose, px, py, 122, 9);
+        if (moored.some((pose) => within(pose, px, py, 39, 6))) return false;
+        if (basins.some((a) => px > a.x && px < a.x + a.width && py > a.y && py < a.y + a.height)) return true;
+        return distanceTo(canal, [px, py]) < CANAL_WIDTH / 2;
+      };
+      for (let out = ROOM_STEP; out <= WAKE_ROOM; out += ROOM_STEP) if (!isWater(x + dx * out, y + dy * out)) return out - ROOM_STEP;
+      return WAKE_ROOM;
+    };
   }
 
   /** Today's route on the map, drawn as far as it's decided. */
@@ -318,8 +381,8 @@ export class Scene {
     const { boat } = trip;
     const at = frame.boat;
     this.boat.setAttribute('transform', transformFor(at));
-    this.wake.setAttribute('transform', transformFor(at));
-    this.wake.setAttribute('opacity', (Math.max(0, boat.v / TOP_SPEED) * 0.55).toFixed(2));
+    const onWater = view.mapFade < 0.98;
+    this.wake.update(at, boat.v, frame.time, onWater);
 
     const lit = light.warm > 0.005 || light.dark > 0.005;
     this.night.setAttribute('display', lit ? '' : 'none');
@@ -334,14 +397,20 @@ export class Scene {
     this.drawPeople(frame.time, frame.homeFrom);
 
     const other = trip.other;
-    this.other.setAttribute('display', other && other.phase !== 'gone' && this.otherPlan ? '' : 'none');
-    this.otherWake.setAttribute('display', this.other.getAttribute('display') ?? '');
-    if (other && other.phase !== 'gone' && this.otherPlan) {
-      const op = otherPose(other, this.otherPlan);
+    const otherOut = other && other.phase !== 'gone' && this.otherPlan ? other : null;
+    this.other.setAttribute('display', otherOut ? '' : 'none');
+    const boats: { x: number; y: number }[] = [at];
+    if (otherOut && this.otherPlan) {
+      const op = otherPose(otherOut, this.otherPlan);
       this.other.setAttribute('transform', transformFor(op));
-      this.otherWake.setAttribute('transform', transformFor(op));
-      this.otherWake.setAttribute('opacity', (Math.max(0, other.v / TOP_SPEED) * 0.55).toFixed(2));
-    }
+      this.otherWake.update(op, otherOut.v, frame.time, onWater);
+      boats.push(op);
+    } else this.otherWake.hide();
+    this.ambience.render(
+      { time: frame.time, weather: frame.weather, now: frame.weatherNow, light, boats: boats.map((b) => [b.x, b.y] as const), route: frame.route, along: frame.along },
+      view,
+      { width: screenWidth, height: screenWidth / (view.width / view.height) },
+    );
 
     for (const parts of this.locks) {
       const work = trip.locks.get(parts.id);

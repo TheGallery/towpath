@@ -7,6 +7,7 @@ import { SAVE_VERSION, loadGame, saveGame } from '../src/sim/save';
 import type { Kept } from '../src/sim/save';
 import { describeDay } from '../src/sim/status';
 import { NO_CONTROLS, lockForYou } from '../src/sim/trip';
+import { planWeather, weatherAt } from '../src/sim/weather';
 import type { Controls } from '../src/sim/trip';
 import { HALLAM } from '../src/world/hallam';
 import { resolveStretch } from '../src/world/stretch';
@@ -92,6 +93,14 @@ describe('keeping your place', () => {
     expect(describeDay(kept, plan)).toBe(describeDay(day, plan));
     expect(lightAt(kept)).toEqual(lightAt(day));
     expect(logLines(kept.log)).toEqual(logLines(day.log));
+  });
+
+  it.each(MOMENTS)('comes back to the same weather, worked out again rather than kept: %s', (_, day) => {
+    const weather = planWeather(HALLAM.seed, day.number);
+    const kept = roundTrip(day)!.day;
+    expect(planWeather(HALLAM.seed, kept.number)).toEqual(weather);
+    expect(weatherAt(kept, weather)).toEqual(weatherAt(day, weather));
+    expect(saveGame(keep(day), HALLAM)).not.toMatch(/weather|mist|drizzle|cloud|duck|swan|sheep|wake/i);
   });
 
   it('keeps a new day as a new day', () => {

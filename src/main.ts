@@ -14,6 +14,8 @@ import { PART_NAMES, callTitle, describeDay, upcoming, waitedWords, wayWords } f
 import { NO_CONTROLS, boatsAt, lockForYou, steersItselfHere, wantsPart } from './sim/trip';
 import type { TripPlan } from './sim/trip';
 import { planWalkers } from './sim/walkers';
+import { planWeather, weatherAt } from './sim/weather';
+import type { Weather, WeatherName } from './sim/weather';
 import { GAME_TITLE, tabTitle } from './title';
 import { Bell } from './ui/bell';
 import { Closeup } from './ui/closeup';
@@ -47,6 +49,12 @@ function readOtherWay(search: string): OtherWay | null {
   return asked === 'ready' ? 'down' : asked === 'against' ? 'up' : null;
 }
 
+/** `?weather=mist`, `drizzle` or `clear` sets the weather for every day, for trying things out. */
+function readWeather(search: string): WeatherName | null {
+  const asked = new URLSearchParams(search).get('weather');
+  return asked === 'mist' || asked === 'drizzle' || asked === 'clear' ? asked : null;
+}
+
 /** Where your place is kept in the browser between visits. */
 const KEPT_KEY = 'towpath:place';
 /** How often your place is kept while you play, in milliseconds, besides when the tab is hidden or closed. */
@@ -72,6 +80,9 @@ const kept = new URLSearchParams(window.location.search).has('fresh') ? null : l
 // It's luck whether the other boat is coming down or going up ahead of you, and the next day gets the other.
 let otherWay: OtherWay = kept?.other ?? askedWay ?? (Math.random() < 0.5 ? 'down' : 'up');
 let day = kept?.day ?? newDay(dayPlan, { other: otherWay });
+const askedWeather = readWeather(window.location.search);
+// Each day's weather comes from the seed and the day's number, so a kept day comes back with the same sky.
+let weather: Weather = planWeather(HALLAM.seed, day.number, askedWeather);
 const rate = readRate(window.location.search);
 const clock = new FixedStepClock(STEP, MAX_CATCH_UP);
 const camera = new FollowCamera(stretch.data.size);
@@ -216,6 +227,7 @@ const hud = new Hud(document, {
   onStartAgain: () => {
     otherWay = askedWay ?? (otherWay === 'down' ? 'up' : 'down');
     day = newDay(dayPlan, { other: otherWay, number: day.number + 1 });
+    weather = planWeather(HALLAM.seed, day.number, askedWeather);
     logbook.close();
     hintedAt = -Infinity;
     askingSpot = false;
@@ -331,7 +343,7 @@ function frame(now: number): void {
   // The part of the lock that needs you glows; while the water moves or the boat comes in, the gates you'll work next are marked too.
   const yours = closeup.isOpen ? null : lockForYou(trip);
   const focus: Focus | null = yours?.next ? { lock: yours.lock.id, part: yours.next.part, glow: yours.job.kind !== 'wait-water' && yours.job.kind !== 'boat-in' } : null;
-  scene.render({ time: day.time, homeFrom: eveningBegan(day), trip, boat: pose, along: trip.boat.s, focus, light: lightAt(day), spots: day.phase === 'dusk' ? day.plan.spots : null }, view, viewport.width);
+  scene.render({ time: day.time, homeFrom: eveningBegan(day), trip, boat: pose, along: trip.boat.s, focus, light: lightAt(day), spots: day.phase === 'dusk' ? day.plan.spots : null, route: day.plan.route, weather, weatherNow: weatherAt(day, weather) }, view, viewport.width);
   closeup.render(dt);
 
   const need = needsYou(day, dayPlan);
