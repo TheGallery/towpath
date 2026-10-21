@@ -1,6 +1,6 @@
 # Towpath
 
-A relaxing top-down browser game about travelling the UK canals on a narrowboat: steering, working locks, mooring at night.
+A relaxing top-down browser game about travelling the UK canals on a narrowboat: steering, working locks, mooring at night. It's meant to be played in the background: the boat cruises by itself and calls you, with a soft bell and the tab's title, for the few moments it needs you.
 
 It is built in TypeScript and SVG with Vite, with no game engine.
 
@@ -8,20 +8,25 @@ It is built in TypeScript and SVG with Vite, with no game engine.
 
 ## What you can play
 
-The first prototype is being built in five steps, each ending with something you can play. Steps 1 to 3 are in:
+The first prototype is being built in five steps, each ending with something you can play. Steps 1 to 4 are in, so you can play a whole day, morning to morning, in about 20 minutes:
 
-- **The canal and the boat.** One hand-made stretch, the Hallam Canal at Wendle. Cast off at Kingsbridge and the boat cruises by itself: under Hollin Bridge, slowly past the visitor moorings, up through Brook Lock, under Mill Bridge, and right at Wendle Junction down the Wendle Arm to the basin by The Navigation pub. The whole trip takes about 16 minutes, plus however long you take over the lock.
+- **The canal and the boat.** One hand-made stretch, the Hallam Canal at Wendle. Cast off at Kingsbridge and the boat cruises by itself: under Hollin Bridge, slowly past the visitor moorings, up through Brook Lock and under Mill Bridge to Wendle Junction. From there it goes the way you choose: right down the Wendle Arm to the basin by The Navigation pub, or straight on along the main line to a quiet bank by Coppice Wood. Either way takes about 16 minutes, plus however long you take over the lock.
 - **The camera.** A close view follows the boat, looking a little ahead. Press <kbd>M</kbd> for a guidebook map of the whole stretch, and <kbd>M</kbd> again (or <kbd>Esc</kbd>) to come back.
 - **Taking the tiller.** Steer with the arrow keys (or WASD) whenever you like. Up and down change the speed, up to the four miles an hour speed limit. Let go for a few seconds and the boat finds its line again by itself. Bumping the bank or a moored boat is soft and does no harm. Near the lock, the junction and the basin, the boat steers itself.
 - **Working the lock.** The boat ties up below Brook Lock and waits for you. The part that needs you next glows: click it, or press <kbd>Space</kbd>, and its close-up fills the screen. At a paddle, drop your windlass on the spindle, wind it round in circles, and take it off again; to wind a paddle down, flick the red safety catch off first, and keep hold, because with the catch off it drops if you let go. At a gate, walk the heavy balance beam round. A gate won't open until the water is level on both sides, and won't close on the boat. Every close-up also works from the keyboard: <kbd>Space</kbd> does the next thing, and held down it winds or pushes. The boat glides in and out by itself, and the gates swing shut behind you.
 - **The other boat.** Another boat uses Brook Lock just before you, so how you find the lock depends on it. Coming down, it empties the lock and leaves the gates open for you: three close-ups. Going up ahead of you, it leaves the lock full, so you empty it first: six close-ups. Which it is comes down to luck, and starting again gives you the other.
-- **Time keeps running.** The game keeps time by the clock, so the boat carries on while the tab is in the background.
+- **The boat calls you.** Four times a day the boat needs you: to cast off in the morning, at Brook Lock, before Wendle Junction to choose a way, and at dusk to choose where to moor. Each time a soft bell rings (made in the browser, once you've clicked or pressed a key in the page) and the tab's title says what it wants, so you can leave the game in a background tab. Press <kbd>Space</kbd>, or the button at the bottom, to answer. If you don't come, the boat waits: tied up at the lock, pulled in before the junction, or at the mooring. It rings again a couple of times if you stay away, says how long it has waited, and the bell can be switched off.
+- **The junction.** Answer the junction call and the map opens with both ways marked. Pick one on the map, from the list, or with <kbd>1</kbd> and <kbd>2</kbd>.
+- **Dusk, night and morning.** The light goes as the boat nears its mooring. Choose one of the marked spots, and the boat glides in and ties up. Evening falls and the lamps come on in the boats, the houses and the pub, then night, then dawn: the end of the prototype day, ready to start another.
+- **Time keeps running.** The game keeps time by the clock, so the boat carries on while the tab is in the background. Browsers slow a hidden tab's timers to once a minute after a while, so a call can ring up to a minute late; the boat still stops at the right place and says how long it has waited.
 
 | Casting off | Brook Lock | The map |
 | --- | --- | --- |
 | ![The start card at Kingsbridge](docs/screenshots/start.webp) | ![The boat rising in Brook Lock](docs/screenshots/lock.webp) | ![The map of the whole stretch](docs/screenshots/map.webp) |
 | **The boat ahead** | **Winding a paddle** | **Pushing a gate** |
 | ![Waiting below Brook Lock while the boat ahead goes up through it](docs/screenshots/other-boat.webp) | ![The paddle close-up, half wound up, with the water dropping down the far wall](docs/screenshots/paddle.webp) | ![The gate close-up, with the balance beam walked half way round](docs/screenshots/gate.webp) |
+| **Which way at the junction?** | **Choosing where to moor at dusk** | **Night in Wendle Basin** |
+| ![The map with both ways from Wendle Junction marked, and the choice between them](docs/screenshots/junction.webp) | ![Dusk in Wendle Basin, with three spots to moor marked on the water](docs/screenshots/dusk.webp) | ![Night in the basin, with lamps lit in the boats and the pub](docs/screenshots/night.webp) |
 
 ## Run it locally
 
@@ -44,7 +49,7 @@ Run the game:
 npm run dev      # open the printed local URL
 ```
 
-To try things out without waiting, add `?speed=10` to the address to run the game ten times faster (anything from 0.25 to 60 works). Add `?lock=ready` or `?lock=against` (or both, as `?speed=10&lock=against`) to choose how the other boat leaves Brook Lock.
+To try things out without waiting, add `?speed=10` to the address to run the game ten times faster (anything from 0.25 to 60 works): a whole day then takes about two minutes, plus the lock. Add `?lock=ready` or `?lock=against` (or both, as `?speed=10&lock=against`) to choose how the other boat leaves Brook Lock.
 
 `npm run build` writes a static build to `dist/`, and `npm run preview` serves it.
 
@@ -60,10 +65,10 @@ npm run build      # type check, then a Vite build
 The game's rules are kept apart from the drawing, so they can be tested without a browser:
 
 - `src/core`: tracks (smooth curves sampled by distance), the fixed-step clock and small maths helpers.
-- `src/world`: the stretch of canal, stored the way a map generator will make it: canals as points, a branch leaving its parent at a junction, features placed by distance along a canal, and a seed for the scenery.
-- `src/sim`: the boat's steering, the lock's rules (water, gates and paddles, and the next job from any state), the hands-on paddle and gate in the close-ups, the other boat, the trip, and the words for what's happening.
+- `src/world`: the stretch of canal, stored the way a map generator will make it: canals as points, a branch leaving its parent at a junction, features placed by distance along a canal, the ways a day can go and the moorings they end at, and a seed for the scenery.
+- `src/sim`: the boat's steering, the lock's rules (water, gates and paddles, and the next job from any state), the hands-on paddle and gate in the close-ups, the other boat, the trip along one way, the boat's calls, the day from morning to morning (the junction choice, mooring, and the light), and the words for what's happening.
 - `src/view`: the camera, as plain maths.
-- `src/render` and `src/ui`: the SVG painting (including the lock close-ups), the panels, the full-screen close-up and the keyboard.
+- `src/render` and `src/ui`: the SVG painting (including the lock close-ups and the night), the panels, the full-screen close-up, the keyboard and the bell.
 
 CI runs the same four checks on every pull request and every push to `main`, and zizmor audits the GitHub Actions workflows.
 
