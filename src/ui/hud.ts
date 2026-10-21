@@ -1,32 +1,45 @@
 // The words and buttons over the game: what's happening, who's steering, the
-// speed, what's next, the lock part that needs you, the map key, and the
-// cards at the start and end.
+// speed, what's next, what the boat is calling you for, the choices it asks
+// you to make, the map key, the bell, and the cards at the start and end of
+// the day.
 
+import type { DayPhase } from '../sim/day';
 import type { Upcoming } from '../sim/status';
-import type { TripPhase } from '../sim/trip';
 
 export interface HudState {
-  readonly phase: TripPhase;
+  readonly phase: DayPhase;
   readonly status: string;
   readonly helm: 'auto' | 'you';
   /** Speed in miles per hour; negative going astern. */
   readonly mph: number;
   readonly next: Upcoming | null;
   readonly mapOpen: boolean;
-  /** The lock part that needs you, as the work button's words, or null when there's nothing to work. */
-  readonly work: string | null;
+  /** What the boat needs you for, as the call button's words, or null when it needs nothing. */
+  readonly call: string | null;
+  /** How long it has waited for you, in words, once that's long enough to say. */
+  readonly waited: string | null;
+  /** The words on the card at the end of the day. */
+  readonly endTitle: string;
+  readonly endText: string;
+}
+
+/** A choice the boat asks you to make: a question and its answers. */
+export interface Choice {
+  readonly title: string;
+  readonly options: readonly { readonly label: string; readonly detail?: string }[];
+  readonly onPick: (index: number) => void;
 }
 
 export interface HudOptions {
   readonly startName: string;
-  readonly endName: string;
-  readonly tripMinutes: number;
+  readonly dayMinutes: number;
   /** How much faster than real time the game runs; 1 normally. */
   readonly rate: number;
   readonly onCastOff: () => void;
   readonly onStartAgain: () => void;
   readonly onToggleMap: () => void;
-  readonly onWork: () => void;
+  readonly onCall: () => void;
+  readonly onBell: (on: boolean) => void;
 }
 
 const TOAST_TIME = 4500;
@@ -52,9 +65,17 @@ export class Hud {
   private readonly endCard: HTMLElement;
   private readonly castOffButton: HTMLButtonElement;
   private readonly againButton: HTMLButtonElement;
-  private readonly lockPanel: HTMLElement;
-  private readonly workButton: HTMLButtonElement;
-  private readonly workText: HTMLElement;
+  private readonly callPanel: HTMLElement;
+  private readonly callButton: HTMLButtonElement;
+  private readonly callText: HTMLElement;
+  private readonly waited: HTMLElement;
+  private readonly choicePanel: HTMLElement;
+  private readonly choiceTitle: HTMLElement;
+  private readonly choiceOptions: HTMLElement;
+  private readonly bellButton: HTMLButtonElement;
+  private readonly endTitle: HTMLElement;
+  private readonly endText: HTMLElement;
+  private choice: Choice | null = null;
   private toastTimer = 0;
   private shown: Partial<Record<string, string>> = {};
 
@@ -73,15 +94,20 @@ export class Hud {
     this.endCard = byId(doc, 'end-card');
     this.castOffButton = byId(doc, 'cast-off');
     this.againButton = byId(doc, 'again');
-    this.lockPanel = byId(doc, 'lock-panel');
-    this.workButton = byId(doc, 'work-button');
-    this.workText = byId(doc, 'work-text');
+    this.callPanel = byId(doc, 'call-panel');
+    this.callButton = byId(doc, 'call-button');
+    this.callText = byId(doc, 'call-text');
+    this.waited = byId(doc, 'waited');
+    this.choicePanel = byId(doc, 'choice-panel');
+    this.choiceTitle = byId(doc, 'choice-title');
+    this.choiceOptions = byId(doc, 'choice-options');
+    this.bellButton = byId(doc, 'bell-button');
+    this.endTitle = byId(doc, 'end-title');
+    this.endText = byId(doc, 'end-text');
 
-    const minutes = Math.round(options.tripMinutes);
-    byId(doc, 'start-text').textContent = `Your narrowboat is moored at ${options.startName}. Cast off and it cruises by itself to ${options.endName}, about ${minutes} minutes away, waiting at the lock for you to work it. Leave it running while you work, and look in when you like.`;
-    byId(doc, 'end-title').textContent = `Moored at ${options.endName}`;
-    byId(doc, 'end-text').textContent = "The boat is tied up for the night. That's the whole trip for now.";
-    this.againButton.textContent = `Start again from ${options.startName}`;
+    const minutes = Math.round(options.dayMinutes);
+    byId(doc, 'start-text').textContent = `Your narrowboat is moored at ${options.startName}. Cast off and it cruises by itself. When it needs you, at the lock, at the junction and at dusk, a soft bell rings and the tab's title says so. If you're busy, it waits. A day, from morning to morning, takes about ${minutes} minutes.`;
+    this.againButton.textContent = `Start a new day from ${options.startName}`;
 
     const rate = byId(doc, 'rate');
     if (options.rate !== 1) {
@@ -92,7 +118,14 @@ export class Hud {
     this.castOffButton.addEventListener('click', options.onCastOff);
     this.againButton.addEventListener('click', options.onStartAgain);
     this.mapButton.addEventListener('click', options.onToggleMap);
-    this.workButton.addEventListener('click', options.onWork);
+    this.callButton.addEventListener('click', options.onCall);
+    const bellText = byId(doc, 'bell-text');
+    this.bellButton.addEventListener('click', () => {
+      const on = this.bellButton.getAttribute('aria-pressed') !== 'true';
+      this.bellButton.setAttribute('aria-pressed', String(on));
+      bellText.textContent = on ? 'Bell on' : 'Bell off';
+      options.onBell(on);
+    });
     this.castOffButton.focus();
   }
 
@@ -107,42 +140,86 @@ export class Hud {
     this.set(this.status, 'status', state.status);
 
     const steering = state.helm === 'you';
-    this.set(this.helmWho, 'helm', steering ? 'You have the tiller' : state.phase === 'cruising' || state.phase === 'in-lock' ? 'The boat is steering itself' : 'Moored');
+    this.set(this.helmWho, 'helm', steering ? 'You have the tiller' : state.phase === 'underway' ? 'The boat is steering itself' : state.phase === 'tying-up' ? 'Tying up' : 'Moored');
     this.helmPanel.classList.toggle('steering', steering);
 
     const mph = Math.abs(state.mph);
     this.set(this.speed, 'speed', state.mph < -0.05 ? `${mph.toFixed(1)} mph astern` : `${mph.toFixed(1)} mph`);
     const next = state.next;
     let nextText = '';
-    if (next && state.phase !== 'moored' && state.phase !== 'arrived') {
+    if (next && state.phase === 'underway') {
       nextText = next.minutes < 1 ? `Next: ${next.name}, just ahead` : `Next: ${next.name}, about ${Math.round(next.minutes)} min`;
     }
     this.set(this.next, 'next', nextText);
 
-    this.lockPanel.hidden = state.work === null || state.mapOpen;
-    if (state.work !== null) this.set(this.workText, 'work', state.work);
+    // While you're choosing, the choice is what needs you.
+    this.callPanel.hidden = state.call === null || this.choice !== null || (state.mapOpen && state.phase !== 'underway');
+    if (state.call !== null) this.set(this.callText, 'call', state.call);
+    this.set(this.waited, 'waited', state.waited ?? '');
+    this.waited.hidden = state.waited === null;
 
     if (this.shown.map !== String(state.mapOpen)) {
       this.shown.map = String(state.mapOpen);
       this.mapButton.setAttribute('aria-pressed', String(state.mapOpen));
       this.mapButtonText.textContent = state.mapOpen ? 'Back to the boat' : 'Map';
-      this.mapKey.hidden = !state.mapOpen;
       this.root.classList.toggle('map-open', state.mapOpen);
     }
+    this.mapKey.hidden = !state.mapOpen || this.choice !== null;
 
     if (this.shown.phase !== state.phase) {
       const was = this.shown.phase;
       this.shown.phase = state.phase;
-      this.startCard.hidden = state.phase !== 'moored';
-      this.endCard.hidden = state.phase !== 'arrived';
-      if (state.phase === 'moored' && was) this.castOffButton.focus();
-      if (state.phase === 'arrived') this.againButton.focus();
+      this.startCard.hidden = state.phase !== 'morning';
+      this.endCard.hidden = state.phase !== 'over';
+      this.root.dataset.phase = state.phase;
+      if (state.phase === 'morning' && was) this.castOffButton.focus();
+      if (state.phase === 'over') {
+        this.set(this.endTitle, 'end-title', state.endTitle);
+        this.set(this.endText, 'end-text', state.endText);
+        this.againButton.focus();
+      }
     }
   }
 
-  /** Puts the keyboard back on the work button after a close-up, or on the game when there's nothing to work. */
-  focusWork(): void {
-    if (!this.lockPanel.hidden) this.workButton.focus({ preventScroll: true });
+  /** Asks you to choose, or puts the question away when given null. The first answer takes the keyboard. */
+  showChoice(choice: Choice | null): void {
+    if (choice === this.choice) return;
+    this.choice = choice;
+    this.choicePanel.hidden = choice === null;
+    this.choiceOptions.replaceChildren();
+    if (!choice) return;
+    this.choiceTitle.textContent = choice.title;
+    for (const [i, option] of choice.options.entries()) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'choice-option';
+      button.setAttribute('aria-keyshortcuts', String(i + 1));
+      const key = document.createElement('kbd');
+      key.textContent = String(i + 1);
+      const words = document.createElement('span');
+      const label = document.createElement('strong');
+      label.textContent = option.label;
+      words.append(label);
+      if (option.detail) {
+        const detail = document.createElement('small');
+        detail.textContent = option.detail;
+        words.append(detail);
+      }
+      button.append(key, words);
+      button.addEventListener('click', () => choice.onPick(i));
+      this.choiceOptions.append(button);
+    }
+    (this.choiceOptions.firstElementChild as HTMLElement | null)?.focus({ preventScroll: true });
+  }
+
+  /** Picks an answer to the open question by its number, from 1, as the number keys do. */
+  pick(number: number): void {
+    if (this.choice && number >= 1 && number <= this.choice.options.length) this.choice.onPick(number - 1);
+  }
+
+  /** Puts the keyboard back on the call button after a close-up, or on the game when nothing needs you. */
+  focusCall(): void {
+    if (!this.callPanel.hidden) this.callButton.focus({ preventScroll: true });
     else if (this.root.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
   }
 

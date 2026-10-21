@@ -1,20 +1,21 @@
 // The game's SVG: the painted world drawn once, the moving parts updated each
-// frame, and the map's names and route on top.
+// frame, the light of the day over it, and the map's names and route on top.
 
 import { poseAt } from '../core/track';
-import type { Point, Pose } from '../core/track';
-import type { Stretch } from '../world/stretch';
+import type { Point, Pose, Track } from '../core/track';
 import { TOP_SPEED } from '../sim/boat';
 import type { LockState, Part } from '../sim/lock';
 import { otherPose } from '../sim/otherboat';
 import type { OtherBoatPlan } from '../sim/otherboat';
+import type { Light, Placed } from '../sim/day';
 import type { Trip } from '../sim/trip';
+import type { Spot, Stretch } from '../world/stretch';
 import type { View } from '../view/camera';
 import { WAKE_PATH, boatMarkup } from './figures';
 import { COLOURS, OTHER_BOAT, YOUR_BOAT, mixHex } from './palette';
 import { lockPose } from './scenery';
 import type { Scenery } from './scenery';
-import { element, f1, smoothPath, transformFor } from './svg';
+import { element, f1, offsetPath, transformFor } from './svg';
 
 interface LockParts {
   readonly id: string;
@@ -33,6 +34,28 @@ export interface Focus {
   readonly lock: string;
   readonly part: Part;
   readonly glow: boolean;
+}
+
+/** One way you can choose at a junction, drawn on the map from where the ways part. */
+export interface WayChoice {
+  readonly id: string;
+  readonly route: Track;
+  readonly from: number;
+  readonly to: number;
+  /** The number that picks it, shown at its end. */
+  readonly label: string;
+}
+
+/** What moves and changes from frame to frame. */
+export interface Frame {
+  readonly trip: Trip;
+  /** Where your boat is, and how far along today's route. */
+  readonly boat: Placed;
+  readonly along: number;
+  readonly focus: Focus | null;
+  readonly light: Light;
+  /** Spots to tie up at, marked while you choose one. */
+  readonly spots: readonly Spot[] | null;
 }
 
 /** How far the bottom gates swing, and the top gate, in degrees from open. */
@@ -55,6 +78,18 @@ export class Scene {
   private readonly overlay: SVGGElement;
   private readonly routeAll: SVGPathElement;
   private readonly routeDone: SVGPathElement;
+  /** How far today's route is drawn: all of it, or up to where the ways part until you choose. */
+  private routeLength = 1;
+  private readonly choices: SVGGElement;
+  private readonly choiceLines: SVGPathElement[] = [];
+  private readonly choiceLabels: SVGTextElement[] = [];
+  private readonly night: SVGGElement;
+  private readonly warm: SVGRectElement;
+  private readonly dark: SVGRectElement;
+  private readonly lamps: SVGGElement;
+  private readonly boatLamp: SVGCircleElement;
+  private readonly spotMarks: SVGGElement;
+  private shownSpots: readonly Spot[] | null = null;
   private readonly labels: SVGTextElement[];
   private readonly marker: SVGGElement;
   private readonly ring: SVGCircleElement;
@@ -62,10 +97,12 @@ export class Scene {
 
   constructor(
     container: HTMLElement,
-    private readonly stretch: Stretch,
+    stretch: Stretch,
     scenery: Scenery,
     private readonly otherPlan: OtherBoatPlan | null,
     onPart: () => void,
+    private readonly onWay: (id: string) => void,
+    private readonly onSpot: (index: number) => void,
   ) {
     const svg = element('svg', { class: 'world', 'aria-hidden': 'true', focusable: 'false', preserveAspectRatio: 'xMidYMid slice' });
     this.svg = svg;
@@ -103,13 +140,31 @@ export class Scene {
     this.boat.innerHTML = boatMarkup(YOUR_BOAT, YOUR_BOAT.steerer);
 
     element('g', {}, svg).innerHTML = scenery.top;
+
+    // The light of the day: a warm wash at morning and dusk, the dark of
+    // night, and the windows that glow through it.
+    const lampGlow = element('radialGradient', { id: 'tp-lamp' }, svg.querySelector('defs') ?? svg);
+    element('stop', { offset: 0, 'stop-color': '#ffe3a1', 'stop-opacity': 0.95 }, lampGlow);
+    element('stop', { offset: 0.3, 'stop-color': '#ffbf5e', 'stop-opacity': 0.5 }, lampGlow);
+    element('stop', { offset: 1, 'stop-color': '#ffbf5e', 'stop-opacity': 0 }, lampGlow);
+    this.night = element('g', { class: 'night', 'pointer-events': 'none', display: 'none' }, svg);
+    const far = { x: -stretch.data.size.width * 2, y: -stretch.data.size.height * 4, width: stretch.data.size.width * 5, height: stretch.data.size.height * 9 };
+    this.warm = element('rect', { ...far, fill: '#f08c3c', opacity: 0 }, this.night);
+    this.dark = element('rect', { ...far, fill: '#0c1733', opacity: 0 }, this.night);
+    this.lamps = element('g', { opacity: 0 }, this.night);
+    for (const [x, y] of scenery.lamps) element('circle', { cx: f1(x), cy: f1(y), r: 30, fill: 'url(#tp-lamp)' }, this.lamps);
+    this.boatLamp = element('circle', { r: 34, fill: 'url(#tp-lamp)' }, this.lamps);
+
+    // The spots to tie up at, while you choose one.
+    this.spotMarks = element('g', { class: 'spot-marks', display: 'none' }, svg);
+
     this.mapLayer = element('g', { opacity: 0 }, svg);
     this.mapLayer.innerHTML = scenery.map;
 
     this.overlay = element('g', { class: 'map-overlay' }, svg);
-    const routePath = smoothPath(stretch.route);
-    this.routeAll = element('path', { d: routePath, fill: 'none', stroke: COLOURS.route, 'stroke-opacity': 0.55, 'stroke-linecap': 'round' }, this.overlay);
-    this.routeDone = element('path', { d: routePath, fill: 'none', stroke: COLOURS.route, 'stroke-linecap': 'round', pathLength: 1000 }, this.overlay);
+    this.choices = element('g', { class: 'way-choices', display: 'none' }, this.overlay);
+    this.routeAll = element('path', { fill: 'none', stroke: COLOURS.route, 'stroke-opacity': 0.55, 'stroke-linecap': 'round' }, this.overlay);
+    this.routeDone = element('path', { fill: 'none', stroke: COLOURS.route, 'stroke-linecap': 'round', pathLength: 1000 }, this.overlay);
     this.labels = scenery.labels.map((l) => {
       const text = element('text', { x: f1(l.x), y: f1(l.y), 'text-anchor': 'middle', class: `map-label ${l.kind}` }, this.overlay);
       text.textContent = l.text;
@@ -121,6 +176,49 @@ export class Scene {
     element('text', { x: 0, y: -14, 'text-anchor': 'middle', class: 'map-label here' }, this.marker).textContent = 'You are here';
 
     container.prepend(svg);
+  }
+
+  /** Today's route on the map, drawn as far as it's decided. */
+  showRoute(route: Track, upTo: number): void {
+    const d = offsetPath(route, 0, 0, upTo);
+    this.routeAll.setAttribute('d', d);
+    this.routeDone.setAttribute('d', d);
+    this.routeLength = upTo;
+  }
+
+  /** The ways you can choose at the junction, on the map, or none once you've chosen. Click one to choose it. */
+  showChoices(ways: readonly WayChoice[] | null): void {
+    this.choices.replaceChildren();
+    this.choiceLines.length = 0;
+    this.choiceLabels.length = 0;
+    this.choices.setAttribute('display', ways ? '' : 'none');
+    for (const [i, w] of (ways ?? []).entries()) {
+      const g = element('g', { class: `way-choice way-${i}` }, this.choices);
+      const d = offsetPath(w.route, 0, w.from, w.to);
+      element('path', { d, class: 'way-hit', fill: 'none', stroke: 'transparent', 'stroke-linecap': 'round' }, g);
+      this.choiceLines.push(element('path', { d, class: 'way-line', fill: 'none', 'stroke-linecap': 'round' }, g));
+      const tip = poseAt(w.route, w.to);
+      const label = element('text', { x: f1(tip.x), y: f1(tip.y), 'text-anchor': 'middle', class: 'map-label choice-label' }, g);
+      label.textContent = w.label;
+      this.choiceLabels.push(label);
+      g.addEventListener('click', () => this.onWay(w.id));
+    }
+    this.labelScale = -1;
+  }
+
+  private markSpots(spots: readonly Spot[] | null): void {
+    if (spots === this.shownSpots) return;
+    this.shownSpots = spots;
+    this.spotMarks.replaceChildren();
+    this.spotMarks.setAttribute('display', spots ? '' : 'none');
+    for (const [i, spot] of (spots ?? []).entries()) {
+      const g = element('g', { class: 'spot-mark', transform: transformFor(spot) }, this.spotMarks);
+      element('rect', { x: -40, y: -9, width: 80, height: 18, rx: 9, class: 'spot-outline' }, g);
+      const badge = element('g', { transform: `rotate(${f1((-spot.angle * 180) / Math.PI)})` }, g);
+      element('circle', { r: 9, class: 'spot-badge' }, badge);
+      element('text', { y: 3.6, 'text-anchor': 'middle', class: 'spot-number' }, badge).textContent = String(i + 1);
+      g.addEventListener('click', () => this.onSpot(i));
+    }
   }
 
   /** Where a part of a lock is on the map: a paddle's gear on the towpath side, or the end of a gate's balance beam. */
@@ -144,15 +242,26 @@ export class Scene {
     return [pose.x + local[0] * c - local[1] * s, pose.y + local[0] * s + local[1] * c];
   }
 
-  render(trip: Trip, view: View, screenWidth: number, focus: Focus | null): void {
+  render(frame: Frame, view: View, screenWidth: number): void {
+    const { trip, focus, light } = frame;
     this.svg.setAttribute('viewBox', `${f1(view.x)} ${f1(view.y)} ${f1(view.width)} ${f1(view.height)}`);
 
     const { boat } = trip;
-    const p = poseAt(this.stretch.route, boat.s, boat.d);
-    const at = { x: p.x, y: p.y, angle: p.angle + boat.psi };
+    const at = frame.boat;
     this.boat.setAttribute('transform', transformFor(at));
     this.wake.setAttribute('transform', transformFor(at));
     this.wake.setAttribute('opacity', (Math.max(0, boat.v / TOP_SPEED) * 0.55).toFixed(2));
+
+    const lit = light.warm > 0.005 || light.dark > 0.005;
+    this.night.setAttribute('display', lit ? '' : 'none');
+    if (lit) {
+      this.warm.setAttribute('opacity', (light.warm * 0.22).toFixed(3));
+      this.dark.setAttribute('opacity', (light.dark * 0.85).toFixed(3));
+      this.lamps.setAttribute('opacity', light.lamps.toFixed(3));
+      this.boatLamp.setAttribute('cx', f1(at.x));
+      this.boatLamp.setAttribute('cy', f1(at.y));
+    }
+    this.markSpots(frame.spots);
 
     const other = trip.other;
     this.other.setAttribute('display', other && other.phase !== 'gone' && this.otherPlan ? '' : 'none');
@@ -211,11 +320,21 @@ export class Scene {
       this.routeAll.setAttribute('stroke-width', f1(3 * k));
       this.routeAll.setAttribute('stroke-dasharray', `${f1(7 * k)} ${f1(6 * k)}`);
       this.routeDone.setAttribute('stroke-width', f1(4.5 * k));
+      for (const line of this.choiceLines) {
+        line.setAttribute('stroke-width', f1(4 * k));
+        line.setAttribute('stroke-dasharray', `${f1(9 * k)} ${f1(7 * k)}`);
+      }
+      for (const hit of this.choices.querySelectorAll('.way-hit')) hit.setAttribute('stroke-width', f1(26 * k));
+      for (const l of this.choiceLabels) {
+        l.setAttribute('font-size', f1(px * k * 1.6));
+        l.setAttribute('stroke-width', f1(3.2 * k));
+        l.setAttribute('dy', f1(-14 * k));
+      }
     }
-    this.routeDone.setAttribute('stroke-dasharray', `${f1((boat.s / this.stretch.route.length) * 1000)} 1000`);
+    this.routeDone.setAttribute('stroke-dasharray', `${f1(Math.min(1, frame.along / this.routeLength) * 1000)} 1000`);
     const pulse = (trip.time * 0.8) % 1;
     this.ring.setAttribute('r', f1(7 + pulse * 12));
     this.ring.setAttribute('stroke-opacity', (1 - pulse).toFixed(2));
-    this.marker.setAttribute('transform', `translate(${f1(p.x)} ${f1(p.y)}) scale(${(k * (screenWidth < 500 ? 0.85 : 1)).toFixed(3)})`);
+    this.marker.setAttribute('transform', `translate(${f1(at.x)} ${f1(at.y)}) scale(${(k * (screenWidth < 500 ? 0.85 : 1)).toFixed(3)})`);
   }
 }

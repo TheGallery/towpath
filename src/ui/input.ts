@@ -1,5 +1,6 @@
 // The keyboard: arrow keys (or WASD) for the tiller and throttle, M for the
-// map, Space (or Enter) to work the lock, and Escape to go back.
+// map, Space (or Enter) to answer the boat's call or work the lock, the number
+// keys to pick an answer when it asks you to choose, and Escape to go back.
 
 import type { HeldKeys } from './closeup';
 import type { Controls } from '../sim/trip';
@@ -11,7 +12,10 @@ const AHEAD = new Set(['ArrowUp', 'KeyW']);
 const ASTERN = new Set(['ArrowDown', 'KeyS']);
 const WORK = new Set(['Space', 'Enter', 'NumpadEnter']);
 
-export type Command = 'toggle-map' | 'back' | 'work';
+export type Command = 'toggle-map' | 'back' | 'work' | { readonly choose: number };
+
+/** The number keys along the top and on the number pad. */
+const NUMBER = /^(?:Digit|Numpad)([1-9])$/;
 
 /** Space and Enter belong to a focused button or field, not the game. */
 const ownsKeys = (target: EventTarget | null): boolean => target instanceof HTMLButtonElement || target instanceof HTMLInputElement || target instanceof HTMLAnchorElement;
@@ -32,6 +36,8 @@ export class Keyboard {
         if (ownsKeys(ev.target)) return;
         this.held.add(ev.code);
         if (!ev.repeat) onCommand('work');
+      } else if (NUMBER.test(ev.code)) {
+        if (!ev.repeat) onCommand({ choose: Number(NUMBER.exec(ev.code)?.[1]) });
       } else if (LEFT.has(ev.code) || RIGHT.has(ev.code) || AHEAD.has(ev.code) || ASTERN.has(ev.code)) {
         this.held.add(ev.code);
       } else {

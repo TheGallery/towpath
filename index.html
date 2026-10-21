@@ -16,6 +16,7 @@
         </section>
         <div class="hud-actions">
           <span class="rate" id="rate" hidden></span>
+          <button type="button" class="map-button bell-button" id="bell-button" aria-pressed="true" aria-label="Bell" title="The bell rings when the boat needs you"><span aria-hidden="true">🔔</span><span class="bell-text" id="bell-text">Bell on</span></button>
           <button type="button" class="map-button" id="map-button" aria-pressed="false" aria-keyshortcuts="M">
             <span id="map-button-text">Map</span> <kbd>M</kbd>
           </button>
@@ -30,10 +31,11 @@
             <span><kbd aria-label="Up arrow">↑</kbd><kbd aria-label="Down arrow">↓</kbd> speed</span>
           </p>
         </section>
-        <section class="panel lock-panel" id="lock-panel" aria-label="The lock" hidden>
-          <button type="button" class="primary work-button" id="work-button" aria-keyshortcuts="Space">
-            <span id="work-text">Work the lock</span> <kbd>Space</kbd>
+        <section class="panel call-panel" id="call-panel" aria-label="What the boat needs you for" hidden>
+          <button type="button" class="primary call-button" id="call-button" aria-keyshortcuts="Space">
+            <span id="call-text">Work the lock</span> <kbd>Space</kbd>
           </button>
+          <p class="waited" id="waited" hidden></p>
         </section>
         <section class="panel trip-panel" aria-label="The trip">
           <p class="speed" id="speed">0.0 mph</p>
@@ -42,6 +44,11 @@
       </div>
 
       <p class="toast" id="toast" role="status" aria-live="polite"></p>
+
+      <section class="panel choice-panel" id="choice-panel" aria-labelledby="choice-title" hidden>
+        <h2 class="choice-title" id="choice-title"></h2>
+        <div class="choice-options" id="choice-options"></div>
+      </section>
 
       <section class="closeup" id="closeup" role="dialog" aria-modal="true" aria-labelledby="closeup-title" hidden>
         <svg class="closeup-art" viewBox="0 0 800 392" preserveAspectRatio="xMidYMid meet" tabindex="0" role="img" aria-label="Close-up of the part of the lock you are working. Use the mouse, or Space and the arrow keys."></svg>
@@ -72,7 +79,8 @@
           <ul class="controls">
             <li><span><kbd>←</kbd><kbd>→</kbd></span> Take the tiller and steer. Let go, and the boat carries on by itself.</li>
             <li><span><kbd>↑</kbd><kbd>↓</kbd></span> Speed up or slow down while you steer.</li>
-            <li><span><kbd>Space</kbd></span> Work the lock: go to the part that glows, and wind or push it in its close-up.</li>
+            <li><span><kbd>Space</kbd></span> Answer the boat's call: work the lock, choose a way, or choose where to moor.</li>
+            <li><span><kbd>1</kbd><kbd>2</kbd></span> Pick an answer when the boat asks you to choose.</li>
             <li><span><kbd>M</kbd></span> Open the map, and press it again to come back.</li>
           </ul>
           <button type="button" class="primary" id="cast-off">Cast off</button>

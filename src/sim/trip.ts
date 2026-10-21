@@ -1,14 +1,16 @@
-// A day's trip along the route: the boat casts off, cruises by itself, slows
-// past moored boats, ties up at each lock for you to work it, and moors at the
-// end. You can take the tiller whenever you like, and the boat takes it back
-// when you let go. Another boat uses the first lock just before you.
+// A day's trip along one way: the boat casts off, cruises by itself, slows
+// past moored boats, ties up at each lock for you to work it, and arrives at
+// the mooring at the end. You can take the tiller whenever you like, and the
+// boat takes it back when you let go. Another boat uses the first lock just
+// before you. The boat can be told to wait at a point, as before a junction
+// until you choose a way, and moved onto another way that shares its start.
 
 import { clamp } from '../core/math';
-import { headingAt } from '../core/track';
+import { headingAt, nearestDistance, poseAt } from '../core/track';
 import type { Track } from '../core/track';
 import { BOAT_LENGTH, MOORED_OFFSET, unitsPerSecond } from '../world/dimensions';
 import { routeDistance } from '../world/stretch';
-import type { FeatureData, Stretch } from '../world/stretch';
+import type { FeatureData, Spot, Stretch, Way } from '../world/stretch';
 import { ASTERN_SPEED, CRUISE_SPEED, LOCK_SPEED, PASSING_SPEED, TOP_SPEED, moveBoat } from './boat';
 import type { Boat, Bump, Helm, Obstacle } from './boat';
 import { CHAMBER_HALF, LANDING_GAP, LEVEL_TOLERANCE, crewStep, isOpen, lockEnds, newCrew, newLock, nextJob, nextPart, stepLock, whereIs } from './lock';
@@ -50,12 +52,15 @@ export interface RouteLock {
 export interface RouteJunction {
   readonly name: string;
   readonly s: number;
-  readonly branch: string;
-  readonly turn: 'left' | 'right';
+  /** The waterway the route goes on along after the junction. */
+  readonly onto: string;
+  readonly turn: 'left' | 'right' | 'straight';
 }
 
 /** Everything about the route the trip's rules need, worked out once. */
 export interface TripPlan {
+  /** The id of the way this trip follows. */
+  readonly way: string;
   readonly route: Track;
   readonly start: number;
   readonly end: number;
@@ -71,16 +76,21 @@ export interface TripPlan {
   readonly places: readonly { readonly name: string; readonly s: number }[];
   /** The other boat's canal and the lock it uses, the first on the route. */
   readonly other: OtherBoatPlan | null;
+  /** Where the boat can tie up for the night at the end. */
+  readonly spots: readonly Spot[];
+  /** What the mooring at the end is like, in a few words. */
+  readonly endAbout: string;
 }
 
-export function planTrip(stretch: Stretch): TripPlan {
-  const { data, route } = stretch;
+/** Plans the trip along one way, the first if none is given. */
+export function planTrip(stretch: Stretch, way: Way = stretch.ways[0]): TripPlan {
+  const { data } = stretch;
+  const { route } = way;
   const locks: RouteLock[] = [];
   const moorings: { name: string; from: number; to: number }[] = [];
   const obstacles: Obstacle[] = [];
-  let endName = data.trip.to;
   let other: OtherBoatPlan | null = null;
-  for (const { feature, s } of stretch.onRoute) {
+  for (const { feature, s } of way.onRoute) {
     if (feature.kind === 'lock') {
       locks.push({ id: feature.id, name: feature.name, s, goingUp: feature.uphill > 0 });
       const track = stretch.waterways.get(feature.waterway);
@@ -92,24 +102,38 @@ export function planTrip(stretch: Stretch): TripPlan {
       }
     }
     if (feature.kind === 'moorings') {
-      const at = feature.boats.map((b) => routeDistance(stretch, feature.waterway, b.at) ?? s);
+      const at = feature.boats.map((b) => routeDistance(stretch, way, feature.waterway, b.at) ?? s);
       for (const bs of at) obstacles.push({ s: bs, d: MOORED_OFFSET });
       moorings.push({ name: feature.name, from: Math.min(...at) - HALF_LENGTH - 70, to: Math.max(...at) + HALF_LENGTH + 40 });
     }
-    if (feature.id === data.trip.to) endName = feature.name;
   }
-  const junctions = stretch.junctions.map((j) => ({
-    name: j.name,
-    s: j.s,
-    branch: j.branch.name,
-    turn: headingAt(route, j.s + 120) > headingAt(route, j.s - 120) ? ('right' as const) : ('left' as const),
-  }));
   const names = new Map(data.waterways.map((w) => [w.id, w.name]));
-  const legs = [{ from: 0, name: names.get(data.trip.route[0]) ?? '' }, ...junctions.map((j) => ({ from: j.s, name: j.branch }))];
+  const legs = [{ from: 0, name: names.get(way.follows[0]) ?? '' }];
+  const junctions: RouteJunction[] = way.junctions.map((j) => {
+    if (!j.turns) return { name: j.name, s: j.s, onto: legs[legs.length - 1].name, turn: 'straight' };
+    legs.push({ from: j.s, name: j.branch.name });
+    return { name: j.name, s: j.s, onto: j.branch.name, turn: headingAt(route, j.s + 120) > headingAt(route, j.s - 120) ? 'right' : 'left' };
+  });
   // Moorings count as reached where the moored boats begin.
   const placeAt = (f: FeatureData, s: number) => (f.kind === 'moorings' ? (moorings.find((m) => m.name === f.name)?.from ?? s) : s);
-  const places = [...stretch.onRoute.map(({ feature, s }) => ({ name: feature.name, s: placeAt(feature, s) })), ...junctions].sort((a, b) => a.s - b.s);
-  return { route, start: stretch.start, end: stretch.end, startName: data.trip.from.name, endName, legs, locks, moorings, obstacles, junctions, places, other };
+  const places = [...way.onRoute.map(({ feature, s }) => ({ name: feature.name, s: placeAt(feature, s) })), ...junctions.map((j) => ({ name: j.name, s: j.s }))].sort((a, b) => a.s - b.s);
+  return {
+    way: way.id,
+    route,
+    start: stretch.start,
+    end: way.end,
+    startName: data.trip.from.name,
+    endName: way.mooring.name,
+    legs,
+    locks,
+    moorings,
+    obstacles,
+    junctions,
+    places,
+    other,
+    spots: way.spots,
+    endAbout: way.mooring.about,
+  };
 }
 
 export type TripPhase = 'moored' | 'cruising' | 'in-lock' | 'arrived';
@@ -142,12 +166,15 @@ export interface Trip {
   /** Locks are worked for you, as when timing the trip, rather than by hand. */
   readonly crewed: boolean;
   lastBump: number;
+  /** A distance along the route the boat waits at, steered or not, until it's let go on. */
+  hold: number | null;
 }
 
 export interface TripOptions {
   /** Which way the other boat goes through the first lock, if there is one. */
   readonly other?: OtherWay | null;
   readonly crewed?: boolean;
+  readonly hold?: number | null;
 }
 
 export type TripEvent =
@@ -180,7 +207,28 @@ export function newTrip(plan: TripPlan, options: TripOptions = {}): Trip {
     other,
     crewed: options.crewed ?? false,
     lastBump: -Infinity,
+    hold: options.hold ?? null,
   };
+}
+
+/**
+ * Moves the boat from one way's route onto another's, where they run
+ * together, keeping it where it is on the water and pointing the same way.
+ */
+export function switchWay(trip: Trip, from: TripPlan, to: TripPlan): void {
+  const { boat } = trip;
+  const p = poseAt(from.route, boat.s, boat.d);
+  const heading = headingAt(from.route, boat.s) + boat.psi;
+  // The nearest sample, then slide along the new route to just abreast of the boat.
+  let s = nearestDistance(to.route, [p.x, p.y]);
+  for (let i = 0; i < 2; i++) {
+    const near = poseAt(to.route, s);
+    s += (p.x - near.x) * Math.cos(near.angle) + (p.y - near.y) * Math.sin(near.angle);
+  }
+  const q = poseAt(to.route, s);
+  boat.s = s;
+  boat.d = (p.x - q.x) * q.nx + (p.y - q.y) * q.ny;
+  boat.psi = heading - headingAt(to.route, s);
 }
 
 export function castOff(trip: Trip): TripEvent[] {
@@ -200,8 +248,8 @@ export function steersItselfHere(plan: TripPlan, s: number): 'lock' | 'junction'
 /** The fastest the boat can go and still stop gently in `distance`. */
 const stoppingSpeed = (distance: number): number => (distance <= 0.3 ? 0 : Math.max(0.5, Math.sqrt(2 * EASE_OFF * distance)));
 
-/** The speed the boat chooses for itself at this point, slowing ahead of time for what's coming. */
-export function plannedSpeed(plan: TripPlan, s: number): number {
+/** The speed the boat chooses for itself at this point, slowing ahead of time for what's coming and for where it's held. */
+export function plannedSpeed(plan: TripPlan, s: number, hold: number | null = null): number {
   let want = CRUISE_SPEED;
   const zones = [
     ...plan.moorings.map((m) => ({ from: m.from, to: m.to, speed: PASSING_SPEED })),
@@ -216,6 +264,7 @@ export function plannedSpeed(plan: TripPlan, s: number): number {
     const landing = l.s - LANDING_GAP;
     if (s <= landing + 0.5) want = Math.min(want, stoppingSpeed(landing - s));
   }
+  if (hold !== null) want = Math.min(want, stoppingSpeed(hold - s));
   return Math.min(want, stoppingSpeed(plan.end - s));
 }
 
@@ -234,8 +283,9 @@ function autoLine(trip: Trip, plan: TripPlan, s: number): number {
   const other = otherOnRoute(trip, plan);
   const meeting = other !== null && other.oncoming && other.s > s && other.s - s < 300;
   if (plan.moorings.some((m) => s > m.from - 40 && s < m.to)) return meeting ? 0 : PASSING_LINE;
-  // Tie up on the towpath side below a lock, keeping clear of a boat coming out.
+  // Tie up on the towpath side below a lock, keeping clear of a boat coming out, and where it's held.
   if (meeting || plan.locks.some((l) => s > l.s - LANDING_GAP - 300 && s < l.s - LANDING_GAP + 1)) return KEEP_RIGHT;
+  if (trip.hold !== null && s > trip.hold - 300 && s < trip.hold + 1) return KEEP_RIGHT;
   return 0;
 }
 
@@ -333,10 +383,12 @@ export function stepTrip(trip: Trip, plan: TripPlan, controls: Controls, dt: num
     stopAt = move.stop;
     helm = { kind: 'auto', line: move.line, speed: move.speed };
   } else {
-    helm = { kind: 'auto', line: autoLine(trip, plan, boat.s), speed: plannedSpeed(plan, boat.s) };
+    helm = { kind: 'auto', line: autoLine(trip, plan, boat.s), speed: plannedSpeed(plan, boat.s, trip.hold) };
     const landing = plan.locks.find((l) => boat.s <= l.s - LANDING_GAP + 0.5);
     stopAt = Math.min(landing ? landing.s - LANDING_GAP : Infinity, plan.end);
   }
+  // Where it's held, the boat waits even when you're steering.
+  if (trip.hold !== null && trip.phase === 'cruising') stopAt = Math.min(stopAt ?? Infinity, trip.hold);
 
   const other = otherOnRoute(trip, plan);
   const obstacles = other ? [...plan.obstacles, { s: other.s, d: other.d }] : plan.obstacles;

@@ -22,8 +22,19 @@ describe('painting the stretch', () => {
 
   it('names every place on the map', () => {
     const names = paintScenery(stretch).labels.map((l) => l.text);
-    for (const name of ['Hallam Canal', 'Wendle Arm', 'Brook Lock', 'Hollin Bridge', 'Mill Bridge', 'Visitor moorings', 'Wendle Junction', 'The Navigation (pub)', 'Wendle', 'Kettle Pond']) {
+    for (const name of ['Hallam Canal', 'Wendle Arm', 'Brook Lock', 'Hollin Bridge', 'Mill Bridge', 'Visitor moorings', 'Wendle Junction', 'The Navigation (pub)', 'Wendle', 'Kettle Pond', 'Coppice Wood', 'Coppice Wood bank']) {
       expect(names).toContain(name);
+    }
+  });
+
+  it('finds windows to light at night, inside the world', () => {
+    const { lamps } = paintScenery(stretch);
+    expect(lamps.length).toBeGreaterThan(10);
+    for (const [x, y] of lamps) {
+      expect(x).toBeGreaterThan(0);
+      expect(x).toBeLessThan(HALLAM.size.width);
+      expect(y).toBeGreaterThan(0);
+      expect(y).toBeLessThan(HALLAM.size.height);
     }
   });
 

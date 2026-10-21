@@ -1,6 +1,7 @@
 // The painted world, worked out once from the stretch and its seed: fields
 // and hedges, woods, roads, the canal and towpath, houses, the pub, moored
-// boats and trees. It also paints the guidebook map that fades in over it.
+// boats and trees. It also paints the guidebook map that fades in over it,
+// and finds the windows that light up at night.
 
 import { lerp, seededRandom } from '../core/math';
 import { distanceTo, nearestDistance, poseAt } from '../core/track';
@@ -27,6 +28,8 @@ export interface Scenery {
   /** The guidebook map. */
   readonly map: string;
   readonly labels: readonly MapLabel[];
+  /** Windows that light up in the evening: houses, the pub and moored boats. */
+  readonly lamps: readonly Point[];
 }
 
 /** How a lock sits on its canal, with the bottom gates at -x. */
@@ -55,14 +58,16 @@ const FIELDS: readonly { colour: string; weight: number; pattern?: string }[] = 
 ];
 
 export function paintScenery(stretch: Stretch): Scenery {
-  const { data, route } = stretch;
+  const { data } = stretch;
+  const [first, ...others] = stretch.ways;
+  const lamps: Point[] = [];
   const r = seededRandom(data.seed);
   const W = data.size.width;
   const H = data.size.height;
   const base: string[] = [];
   const top: string[] = [];
   const map: string[] = [];
-  const canals = [...stretch.waterways.values(), route];
+  const canals = [...stretch.waterways.values(), ...stretch.ways.map((w) => w.route)];
   const roads = [...stretch.roads.values()];
   const basins = data.features.filter((f) => f.kind === 'basin');
   const clearOf = (pt: Point, gap: number): boolean =>
@@ -169,12 +174,13 @@ export function paintScenery(stretch: Stretch): Scenery {
     const g = (width - CANAL_WIDTH) / 2;
     for (const { area: a } of basins) base.push(tag('rect', { x: a.x - g, y: a.y - g, width: a.width + 2 * g, height: a.height + 2 * g, rx: 26 + g, fill: colour }));
   }
-  base.push(tag('path', { d: offsetPath(route, 0, 0, stretch.end), stroke: COLOURS.waterLight, 'stroke-width': 1.5, fill: 'none', opacity: 0.35, 'stroke-dasharray': '24 60' }));
+  for (const w of stretch.ways) base.push(tag('path', { d: offsetPath(w.route, 0, 0, w.end), stroke: COLOURS.waterLight, 'stroke-width': 1.5, fill: 'none', opacity: 0.35, 'stroke-dasharray': '24 60' }));
 
-  // The towpath runs along the right-hand bank of the route, and on along
-  // any canal the route turns off.
-  let towpath = offsetPath(route, TOWPATH_OFFSET, 0, stretch.end - 120);
-  for (const j of stretch.junctions) {
+  // The towpath runs along the right-hand bank of the first way, and on along
+  // any canal it turns off, which the other ways follow.
+  let towpath = offsetPath(first.route, TOWPATH_OFFSET, 0, first.mooring.kind === 'basin' ? first.end - 120 : first.route.length);
+  for (const j of first.junctions) {
+    if (!j.turns) continue;
     const parentId = j.branch.leaves?.waterway;
     const parent = parentId ? stretch.waterways.get(parentId) : undefined;
     if (parent) towpath += offsetPath(parent, TOWPATH_OFFSET, nearestDistance(parent, j.point) + 70, parent.length);
@@ -196,6 +202,7 @@ export function paintScenery(stretch: Stretch): Scenery {
     // The lock keeper's cottage, on the far side from the towpath.
     const c = poseAt(trackOf(stretch, f), f.at - 20, -120);
     houses.push({ x: c.x, y: c.y, angle: c.angle, w: 40, h: 24, roof: COLOURS.roofSlate });
+    lamps.push([c.x, c.y]);
   }
 
   // Houses: villages along their roads, and farms.
@@ -211,6 +218,7 @@ export function paintScenery(stretch: Stretch): Scenery {
       const roof = r() < 0.5 ? COLOURS.roofRed : COLOURS.roofSlate;
       if (canals.some((t) => distanceTo(t, pt) < 90)) continue;
       houses.push({ x: pt[0], y: pt[1], angle: p.angle, w, h, roof });
+      if (k % 3 !== 1) lamps.push(pt);
     }
   }
   for (const farm of data.farms) {
@@ -218,6 +226,7 @@ export function paintScenery(stretch: Stretch): Scenery {
     if (!road) continue;
     const p = poseAt(road, farm.at, farm.side * 70);
     houses.push({ x: p.x, y: p.y, angle: p.angle, w: 44, h: 26, roof: COLOURS.roofRed });
+    lamps.push([p.x, p.y]);
     houses.push({ x: p.x + 70, y: p.y + 20, angle: p.angle + 0.1, w: 70, h: 34, roof: '#7b6a55' });
   }
   for (const h of houses) {
@@ -246,6 +255,7 @@ export function paintScenery(stretch: Stretch): Scenery {
       base.push(`<g transform="translate(${x + tx + 13} ${y + ty + 2}) rotate(90) scale(1.6)">${personMarkup(coat, COLOURS.skin)}</g>`);
     }
     map.push(tag('circle', { cx: x, cy: y, r: 24, fill: MAP_COLOURS.pub, stroke: MAP_COLOURS.road, 'stroke-width': 6 }));
+    lamps.push([x - 30, y + 4], [x + 20, y + 4], [x + 120, y + 5]);
   }
 
   // Moored boats: along the bank at moorings, and in basins.
@@ -256,18 +266,41 @@ export function paintScenery(stretch: Stretch): Scenery {
         const p = poseAt(track, b.at, MOORED_OFFSET);
         base.push(placed({ x: p.x, y: p.y, angle: p.angle + (b.facing < 0 ? Math.PI : 0) }, boatMarkup(livery(b.livery))));
         map.push(tag('path', { d: offsetPath(track, MOORED_OFFSET + 10, b.at - 36, b.at + 36), stroke: MAP_COLOURS.moorings, 'stroke-width': 12, fill: 'none' }));
+        lamps.push([p.x, p.y]);
       }
     } else if (f.kind === 'basin') {
-      for (const b of f.boats) base.push(placed({ x: b.at[0], y: b.at[1], angle: b.angle }, boatMarkup(livery(b.livery))));
+      for (const b of f.boats) {
+        base.push(placed({ x: b.at[0], y: b.at[1], angle: b.angle }, boatMarkup(livery(b.livery))));
+        lamps.push(b.at);
+      }
+    } else if (f.kind === 'bank') {
+      // Mooring rings along the edge of the towpath, a bench, and a short mown verge.
+      const track = trackOf(stretch, f);
+      const ats = f.spots.map((sp) => sp.at);
+      const from = Math.min(f.at, ...ats) - 20;
+      const to = Math.max(...ats) + 50;
+      base.push(tag('path', { d: offsetPath(track, TOWPATH_OFFSET + 14, from, to), stroke: '#b4d48a', 'stroke-width': 12, fill: 'none', 'stroke-linecap': 'round' }));
+      for (const at of ats) {
+        for (const end of [-28, 28]) {
+          const p = poseAt(track, at + end, TOWPATH_OFFSET - 6);
+          base.push(tag('circle', { cx: f1(p.x), cy: f1(p.y), r: 2.6, fill: 'none', stroke: '#3b3b3b', 'stroke-width': 1.4 }));
+        }
+      }
+      const bench = poseAt(track, ats[Math.floor(ats.length / 2)], TOWPATH_OFFSET + 15);
+      base.push(placed(bench, tag('rect', { x: -9, y: -3, width: 18, height: 6, rx: 1, fill: '#8b5a2b', stroke: '#5e3c1c', 'stroke-width': 1 })));
+      map.push(tag('path', { d: offsetPath(track, MOORED_OFFSET + 10, from + 20, to - 20), stroke: MAP_COLOURS.moorings, 'stroke-width': 12, fill: 'none', 'stroke-dasharray': '10 8' }));
     }
   }
 
   // Trees last, so their tops overhang hedges and fields. A line of them
   // stands along the far bank from the towpath.
-  const lineOfTrees = Math.floor(route.length / 50);
-  for (let i = 0; i < lineOfTrees; i++) {
-    const p = poseAt(route, 60 + i * 50 + r() * 30, -60 - r() * 20);
-    if (r() < 0.55 && clearOf([p.x, p.y], 48)) trees.push([p.x, p.y, 12 + r() * 8]);
+  // The other ways get theirs from where they leave the first.
+  const lines = [{ route: first.route, from: 60 }, ...others.map((w) => ({ route: w.route, from: (w.junctions[0]?.s ?? 0) + 100 }))];
+  for (const line of lines) {
+    for (let at = line.from; at < line.route.length; at += 50) {
+      const p = poseAt(line.route, at + r() * 30, -60 - r() * 20);
+      if (r() < 0.55 && clearOf([p.x, p.y], 48)) trees.push([p.x, p.y, 12 + r() * 8]);
+    }
   }
   const shades = ['#4d8840', '#5a9447', '#41763a', '#6a9f4e'];
   const byShade = shades.map(() => '');
@@ -312,7 +345,7 @@ export function paintScenery(stretch: Stretch): Scenery {
     .map(([id, gap, rot, c]) => `<pattern id="${id}" width="${gap}" height="${gap}" patternUnits="userSpaceOnUse" patternTransform="rotate(${rot})"><path d="M0 0V${gap}" stroke="${c}" stroke-width="2.4" opacity="0.6"/></pattern>`)
     .join('');
 
-  return { defs, base: base.join(''), top: top.join(''), map: map.join(''), labels: mapLabels(stretch) };
+  return { defs, base: base.join(''), top: top.join(''), map: map.join(''), labels: mapLabels(stretch), lamps };
 }
 
 function lockStonework(): string {
@@ -358,7 +391,8 @@ export function mapLabels(stretch: Stretch): MapLabel[] {
     const p = beside(trackOf(stretch, f), f.at, f.labelSide * 95);
     labels.push({ text: f.name, x: p.x, y: p.y, kind: f.kind === 'lock' ? 'place' : 'plain' });
   }
-  for (const j of stretch.junctions) {
+  const junctions = new Map(stretch.ways.flatMap((w) => w.junctions).map((j) => [j.name, j]));
+  for (const j of junctions.values()) {
     const parent = j.branch.leaves ? stretch.waterways.get(j.branch.leaves.waterway) : undefined;
     if (!parent) continue;
     const p = beside(parent, nearestDistance(parent, j.point), -150);
