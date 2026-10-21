@@ -9,10 +9,13 @@ import { otherPose } from '../sim/otherboat';
 import type { OtherBoatPlan } from '../sim/otherboat';
 import type { Light, Placed } from '../sim/day';
 import type { Trip } from '../sim/trip';
+import { dogAt, walkerAt } from '../sim/walkers';
+import type { Walker } from '../sim/walkers';
 import type { Spot, Stretch } from '../world/stretch';
+import type { TowpathRun } from '../world/towpath';
 import type { View } from '../view/camera';
-import { WAKE_PATH, boatMarkup } from './figures';
-import { COLOURS, OTHER_BOAT, YOUR_BOAT, mixHex } from './palette';
+import { WAKE_PATH, boatMarkup, dogMarkup, personMarkup } from './figures';
+import { COLOURS, DOG_COATS, HEADS, JOGGER_TOPS, OTHER_BOAT, WALKER_COATS, YOUR_BOAT, mixHex, pick } from './palette';
 import { lockPose } from './scenery';
 import type { Scenery } from './scenery';
 import { element, f1, offsetPath, transformFor } from './svg';
@@ -46,8 +49,25 @@ export interface WayChoice {
   readonly label: string;
 }
 
+/** The towpath and the people who walk it. */
+export interface Towpath {
+  readonly runs: readonly TowpathRun[];
+  readonly walkers: readonly Walker[];
+}
+
+/** One person on the towpath as drawn, and their dog if they have one. */
+interface Figure {
+  readonly walker: Walker;
+  readonly person: SVGGElement;
+  readonly feet: readonly [SVGEllipseElement, SVGEllipseElement];
+  readonly dog: SVGGElement | null;
+}
+
 /** What moves and changes from frame to frame. */
 export interface Frame {
+  /** Seconds since the day began, and when the evening began, from when people head home. */
+  readonly time: number;
+  readonly homeFrom: number | null;
   readonly trip: Trip;
   /** Where your boat is, and how far along today's route. */
   readonly boat: Placed;
@@ -62,6 +82,11 @@ export interface Frame {
 const BOTTOM_SWING = 48;
 const TOP_SWING = 90;
 
+/** How big people and dogs are drawn, and how far they fade as they step onto or off the towpath. */
+const PERSON_SCALE = 1.7;
+const DOG_SCALE = 1.4;
+const FADE = 16;
+
 /** Labels and lines on the map are drawn at these sizes on screen, in pixels. */
 const LABEL_PX = 12.5;
 const LABEL_PX_SMALL = 10.5;
@@ -74,6 +99,7 @@ export class Scene {
   private readonly other: SVGGElement;
   private readonly otherWake: SVGPathElement;
   private readonly focus: SVGGElement;
+  private readonly figures: Figure[] = [];
   private readonly mapLayer: SVGGElement;
   private readonly overlay: SVGGElement;
   private readonly routeAll: SVGPathElement;
@@ -100,6 +126,7 @@ export class Scene {
     stretch: Stretch,
     scenery: Scenery,
     private readonly otherPlan: OtherBoatPlan | null,
+    private readonly towpath: Towpath,
     onPart: () => void,
     private readonly onWay: (id: string) => void,
     private readonly onSpot: (index: number) => void,
@@ -132,6 +159,20 @@ export class Scene {
     element('circle', { r: 22, fill: 'transparent' }, this.focus);
     element('circle', { r: 11, class: 'world-glow', fill: 'none' }, this.focus);
     this.focus.addEventListener('click', onPart);
+    // People on the towpath, under the bridges they come and go by.
+    const people = element('g', { class: 'towpath-people', 'pointer-events': 'none' }, moving);
+    for (const walker of towpath.walkers) {
+      const dog = walker.dog ? element('g', { display: 'none' }, people) : null;
+      const [coat, ears] = pick(DOG_COATS, walker.look >> 3);
+      if (dog) dog.innerHTML = dogMarkup(coat, ears);
+      const person = element('g', { display: 'none' }, people);
+      // Feet, to swing as they step.
+      const foot = () => element('ellipse', { rx: 1.3, ry: 0.8, fill: '#3a312b' }, person);
+      const feet = [foot(), foot()] as const;
+      const body = element('g', {}, person);
+      body.innerHTML = personMarkup(walker.kind === 'jogger' ? pick(JOGGER_TOPS, walker.look) : pick(WALKER_COATS, walker.look), pick(HEADS, walker.look >> 2));
+      this.figures.push({ walker, person, feet, dog });
+    }
     this.otherWake = element('path', { d: WAKE_PATH, stroke: '#eaf7fb', 'stroke-width': 1.6, fill: 'none', 'stroke-linecap': 'round' }, moving);
     this.other = element('g', { display: 'none' }, moving);
     this.other.innerHTML = boatMarkup(OTHER_BOAT, OTHER_BOAT.steerer);
@@ -242,6 +283,34 @@ export class Scene {
     return [pose.x + local[0] * c - local[1] * s, pose.y + local[0] * s + local[1] * c];
   }
 
+  /** People where they are on the towpath, stepping as they go, with their dogs about them. */
+  private drawPeople(time: number, homeFrom: number | null): void {
+    for (const { walker, person, feet, dog } of this.figures) {
+      const at = walkerAt(walker, time, homeFrom);
+      person.setAttribute('display', at ? '' : 'none');
+      dog?.setAttribute('display', at ? '' : 'none');
+      if (!at) continue;
+      const run = this.towpath.runs[at.run];
+      const place = (s: number, d: number, facing: number, scale: number, turn = 0) => {
+        const p = poseAt(run.track, s, d);
+        return `translate(${f1(p.x)} ${f1(p.y)}) rotate(${f1(((p.angle + (facing < 0 ? Math.PI : 0) + turn) * 180) / Math.PI)}) scale(${scale})`;
+      };
+      const fade = at.fromHome < FADE ? (at.fromHome / FADE).toFixed(2) : '1';
+      person.setAttribute('transform', place(at.s, at.d, at.facing, PERSON_SCALE));
+      person.setAttribute('opacity', fade);
+      // A step every few units along the path, longer when jogging.
+      const stride = walker.kind === 'jogger' ? 4.4 : 3;
+      const swing = Math.sin((at.s / stride) * Math.PI) * (walker.kind === 'jogger' ? 2.3 : 1.6);
+      feet[0].setAttribute('transform', `translate(${f1(swing)} -1.2)`);
+      feet[1].setAttribute('transform', `translate(${f1(-swing)} 1.2)`);
+      if (dog) {
+        const pup = dogAt(walker, at, time);
+        dog.setAttribute('transform', place(pup.s, pup.d, pup.facing, DOG_SCALE, 0.25 * Math.sin(time * 1.3 + walker.look)));
+        dog.setAttribute('opacity', fade);
+      }
+    }
+  }
+
   render(frame: Frame, view: View, screenWidth: number): void {
     const { trip, focus, light } = frame;
     this.svg.setAttribute('viewBox', `${f1(view.x)} ${f1(view.y)} ${f1(view.width)} ${f1(view.height)}`);
@@ -262,6 +331,7 @@ export class Scene {
       this.boatLamp.setAttribute('cy', f1(at.y));
     }
     this.markSpots(frame.spots);
+    this.drawPeople(frame.time, frame.homeFrom);
 
     const other = trip.other;
     this.other.setAttribute('display', other && other.phase !== 'gone' && this.otherPlan ? '' : 'none');

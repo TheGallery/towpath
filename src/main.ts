@@ -5,23 +5,28 @@ import { paintScenery } from './render/scenery';
 import { Scene } from './render/scene';
 import type { Focus, WayChoice } from './render/scene';
 import { waitedFor } from './sim/calls';
-import { answerLock, boatPose, canChooseWay, castOffDay, chooseSpot, chooseWay, dayTimeline, lightAt, needsYou, newDay, planDay, stepDay } from './sim/day';
+import { answerLock, boatPose, canChooseWay, castOffDay, chooseSpot, chooseWay, dayTimeline, eveningBegan, lightAt, needsYou, newDay, planDay, stepDay } from './sim/day';
 import type { DayEvent } from './sim/day';
+import { logLines } from './sim/logbook';
 import type { OtherWay } from './sim/otherboat';
+import { loadGame, saveGame } from './sim/save';
 import { PART_NAMES, callTitle, describeDay, upcoming, waitedWords, wayWords } from './sim/status';
 import { NO_CONTROLS, boatsAt, lockForYou, steersItselfHere, wantsPart } from './sim/trip';
 import type { TripPlan } from './sim/trip';
+import { planWalkers } from './sim/walkers';
 import { GAME_TITLE, tabTitle } from './title';
 import { Bell } from './ui/bell';
 import { Closeup } from './ui/closeup';
 import { Hud } from './ui/hud';
 import type { Choice } from './ui/hud';
 import { Keyboard } from './ui/input';
+import { LogbookView } from './ui/logbook';
 import { FollowCamera } from './view/camera';
 import type { View } from './view/camera';
 import { milesPerHour } from './world/dimensions';
 import { HALLAM } from './world/hallam';
 import { resolveStretch } from './world/stretch';
+import { towpathRuns } from './world/towpath';
 
 document.title = GAME_TITLE;
 
@@ -36,23 +41,53 @@ function readRate(search: string): number {
   return Number.isFinite(asked) && asked > 0 ? clamp(asked, 0.25, 60) : 1;
 }
 
-/** `?lock=ready` or `?lock=against` picks how the other boat leaves the lock, for trying things out. */
+/** `?lock=ready` or `?lock=against` picks how the other boat leaves the lock on a new day, for trying things out. */
 function readOtherWay(search: string): OtherWay | null {
   const asked = new URLSearchParams(search).get('lock');
   return asked === 'ready' ? 'down' : asked === 'against' ? 'up' : null;
 }
 
+/** Where your place is kept in the browser between visits. */
+const KEPT_KEY = 'towpath:place';
+/** How often your place is kept while you play, in milliseconds, besides when the tab is hidden or closed. */
+const KEEP_EVERY = 5000;
+
+/** Browser storage can be switched off or full, and the game carries on without it. */
+function readKept(): string | null {
+  try {
+    return window.localStorage.getItem(KEPT_KEY);
+  } catch {
+    return null;
+  }
+}
+
 const stretch = resolveStretch(HALLAM);
 const dayPlan = planDay(stretch);
 const fork = dayPlan.fork;
+const runs = towpathRuns(stretch);
+const walkers = planWalkers(runs, HALLAM.seed);
 const askedWay = readOtherWay(window.location.search);
+// `?fresh` sets your kept place aside and starts a new day.
+const kept = new URLSearchParams(window.location.search).has('fresh') ? null : loadGame(readKept(), dayPlan, HALLAM);
 // It's luck whether the other boat is coming down or going up ahead of you, and the next day gets the other.
-let otherWay: OtherWay = askedWay ?? (Math.random() < 0.5 ? 'down' : 'up');
-let day = newDay(dayPlan, { other: otherWay });
+let otherWay: OtherWay = kept?.other ?? askedWay ?? (Math.random() < 0.5 ? 'down' : 'up');
+let day = kept?.day ?? newDay(dayPlan, { other: otherWay });
 const rate = readRate(window.location.search);
 const clock = new FixedStepClock(STEP, MAX_CATCH_UP);
 const camera = new FollowCamera(stretch.data.size);
 const bell = new Bell(window);
+bell.on = kept?.bell ?? true;
+
+let keptAt = 0;
+/** Keeps your place in the browser, so closing or reloading the tab carries on from here. */
+function keepPlace(): void {
+  keptAt = performance.now();
+  try {
+    window.localStorage.setItem(KEPT_KEY, saveGame({ day, other: otherWay, bell: bell.on }, HALLAM));
+  } catch {
+    // No storage: the day goes on, but won't be kept.
+  }
+}
 
 const found = document.getElementById('game');
 if (!found) throw new Error('The page is missing #game');
@@ -62,6 +97,7 @@ const scene = new Scene(
   stretch,
   paintScenery(stretch),
   dayPlan.ways[0].other,
+  { runs, walkers },
   () => workLock(),
   (id) => pickWay(id),
   (index) => pickSpot(index),
@@ -154,8 +190,16 @@ function choose(number: number): void {
   } else if (need === 'spot' && number <= day.plan.spots.length) pickSpot(number - 1);
 }
 
+const logbook = new LogbookView(document);
+/** Opens the day's logbook once it's written up in the evening, or closes it. */
+function toggleLogbook(): void {
+  if (logbook.isOpen) logbook.close();
+  else if (day.log.written && !closeup.isOpen) logbook.open({ day: `Day ${day.number} · ${HALLAM.name}`, lines: logLines(day.log), seed: `Seed ${HALLAM.seed}` });
+}
+
 function back(): void {
-  if (closeup.isOpen) closeup.close();
+  if (logbook.isOpen) logbook.close();
+  else if (closeup.isOpen) closeup.close();
   else if (askingSpot) askingSpot = false;
   else camera.setMap(false);
 }
@@ -171,20 +215,30 @@ const hud = new Hud(document, {
   onCastOff: () => handle(castOffDay(day)),
   onStartAgain: () => {
     otherWay = askedWay ?? (otherWay === 'down' ? 'up' : 'down');
-    day = newDay(dayPlan, { other: otherWay });
+    day = newDay(dayPlan, { other: otherWay, number: day.number + 1 });
+    logbook.close();
     hintedAt = -Infinity;
     askingSpot = false;
     camera.snap();
     camera.setMap(false);
     showRoute();
     handle(castOffDay(day));
+    keepPlace();
   },
   onToggleMap: () => toggleMap(),
   onCall: () => answerCall(),
-  onBell: (on) => (bell.on = on),
+  onBell: (on) => {
+    bell.on = on;
+    keepPlace();
+  },
+  onLogbook: () => toggleLogbook(),
 });
+hud.setBell(bell.on);
 const keyboard = new Keyboard(window, (command) => {
-  if (typeof command === 'object') choose(command.choose);
+  // While the logbook is open, the keys only close it.
+  if (logbook.isOpen && command !== 'back' && command !== 'logbook') return;
+  if (command === 'logbook') toggleLogbook();
+  else if (typeof command === 'object') choose(command.choose);
   else if (command === 'work') answerCall();
   else if (command === 'toggle-map') toggleMap();
   else back();
@@ -216,7 +270,7 @@ function handle(events: readonly DayEvent[]): void {
     } else if (e.kind === 'tied-up') {
       hud.toast(`Tied up ${inSentence(e.spot)} for the night.`);
     } else if (e.kind === 'phase' && e.phase === 'evening') {
-      hud.toast('Evening falls, and the lamps are lit.');
+      hud.toast('Evening falls and the lamps are lit. The day is written up in the logbook.');
     } else if (e.kind === 'reached-lock' && e.waiting) {
       hud.toast(day.trip.other?.way === 'down' ? `Another boat is coming down through ${lockName(e.lock)}. Yours waits its turn.` : `The boat ahead is going up through ${lockName(e.lock)}. Yours waits its turn.`);
     } else if (e.kind === 'lock-yours') {
@@ -251,6 +305,7 @@ function simulate(now: number): void {
     events.push(...stepDay(day, dayPlan, controls, STEP));
   }
   handle(events);
+  if (now - keptAt > KEEP_EVERY) keepPlace();
 
   // Say why the tiller isn't answering where the boat steers itself.
   const { trip } = day;
@@ -276,7 +331,7 @@ function frame(now: number): void {
   // The part of the lock that needs you glows; while the water moves or the boat comes in, the gates you'll work next are marked too.
   const yours = closeup.isOpen ? null : lockForYou(trip);
   const focus: Focus | null = yours?.next ? { lock: yours.lock.id, part: yours.next.part, glow: yours.job.kind !== 'wait-water' && yours.job.kind !== 'boat-in' } : null;
-  scene.render({ trip, boat: pose, along: trip.boat.s, focus, light: lightAt(day), spots: day.phase === 'dusk' ? day.plan.spots : null }, view, viewport.width);
+  scene.render({ time: day.time, homeFrom: eveningBegan(day), trip, boat: pose, along: trip.boat.s, focus, light: lightAt(day), spots: day.phase === 'dusk' ? day.plan.spots : null }, view, viewport.width);
   closeup.render(dt);
 
   const need = needsYou(day, dayPlan);
@@ -289,6 +344,7 @@ function frame(now: number): void {
     mph: day.phase === 'underway' ? milesPerHour(trip.boat.v) : 0,
     next: upcoming(day.plan.places, trip.boat.s),
     mapOpen: camera.mapOpen,
+    logbook: day.log.written,
     call,
     waited: day.calls.open && call ? waitedWords(waitedFor(day.calls, day.time)) : null,
     endTitle: `Morning at ${day.plan.endName}`,
@@ -298,6 +354,10 @@ function frame(now: number): void {
 }
 requestAnimationFrame(frame);
 handle([]);
+if (kept && day.phase !== 'morning') {
+  const leg = [...day.plan.legs].reverse().find((l) => day.trip.boat.s >= l.from);
+  hud.toast(day.phase === 'underway' ? `Back on the ${leg?.name ?? 'canal'}, where you left off.` : `Back at ${day.plan.endName}, where you left off.`);
+}
 
 // Browsers stop drawing hidden tabs, but the canal carries on: keep the
 // game's clock running with a timer until the tab is back. Browsers slow
@@ -307,9 +367,13 @@ handle([]);
 let hiddenTimer = 0;
 document.addEventListener('visibilitychange', () => {
   window.clearInterval(hiddenTimer);
-  if (document.hidden) hiddenTimer = window.setInterval(() => simulate(performance.now()), 1000);
-  else {
+  if (document.hidden) {
+    keepPlace();
+    hiddenTimer = window.setInterval(() => simulate(performance.now()), 1000);
+  } else {
     lastFrame = null;
     camera.snap();
   }
 });
+// Keep your place as the tab closes or reloads, as well as every few seconds.
+window.addEventListener('pagehide', () => keepPlace());

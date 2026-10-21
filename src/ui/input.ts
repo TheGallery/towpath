@@ -1,5 +1,5 @@
 // The keyboard: arrow keys (or WASD) for the tiller and throttle, M for the
-// map, Space (or Enter) to answer the boat's call or work the lock, the number
+// map, L for the logbook, Space (or Enter) to answer the boat's call or work the lock, the number
 // keys to pick an answer when it asks you to choose, and Escape to go back.
 
 import type { HeldKeys } from './closeup';
@@ -12,7 +12,7 @@ const AHEAD = new Set(['ArrowUp', 'KeyW']);
 const ASTERN = new Set(['ArrowDown', 'KeyS']);
 const WORK = new Set(['Space', 'Enter', 'NumpadEnter']);
 
-export type Command = 'toggle-map' | 'back' | 'work' | { readonly choose: number };
+export type Command = 'toggle-map' | 'logbook' | 'back' | 'work' | { readonly choose: number };
 
 /** The number keys along the top and on the number pad. */
 const NUMBER = /^(?:Digit|Numpad)([1-9])$/;
@@ -26,9 +26,11 @@ export class Keyboard {
   constructor(target: Window, onCommand: (command: Command) => void) {
     target.addEventListener('keydown', (ev) => {
       if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
-      // M is a letter shortcut, so it follows the letter wherever the layout puts it.
+      // M and L are letter shortcuts, so they follow the letter wherever the layout puts it.
       if (ev.key === 'm' || ev.key === 'M') {
         if (!ev.repeat) onCommand('toggle-map');
+      } else if (ev.key === 'l' || ev.key === 'L') {
+        if (!ev.repeat) onCommand('logbook');
       } else if (ev.key === 'Escape') {
         onCommand('back');
         return;

@@ -105,7 +105,7 @@ export function describeDay(day: Day, plan: DayPlan): string {
     case 'tying-up':
       return `Tying up ${inSentence(day.spot?.name ?? 'here')} for the night.`;
     case 'evening':
-      return `Evening at ${p.endName}, ${p.endAbout}. The lamps are lit in the boat.`;
+      return `Evening at ${p.endName}, ${p.endAbout}. The lamps are lit, and the last walkers head home along the towpath.`;
     case 'night':
       return 'Night. The canal is quiet, and the boat is tied up snug.';
     case 'dawn':

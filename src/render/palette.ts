@@ -69,6 +69,21 @@ export const OTHER_BOAT: Livery & { steerer: string } = { roof: '#e8dcc0', side:
 
 export const livery = (n: number): Livery => LIVERIES[((n % LIVERIES.length) + LIVERIES.length) % LIVERIES.length];
 
+/** What people on the towpath wear, and their dogs' coats, picked by number. */
+export const WALKER_COATS: readonly string[] = ['#3f5f8a', '#a8402f', '#6b4a7a', '#2f6b4a', '#c9962b', '#5b6763', '#8a5a3a'];
+export const JOGGER_TOPS: readonly string[] = ['#e76f51', '#2a9d8f', '#e9c46a', '#d1495b'];
+export const HEADS: readonly string[] = ['#8b5a2b', '#3a312b', '#d9c9a0', '#b8433a', '#2f4f86', '#6b6e73'];
+export const DOG_COATS: readonly (readonly [string, string])[] = [
+  ['#8b5a2b', '#5e3c1c'],
+  ['#2b2b2b', '#1a1a1a'],
+  ['#6b4a35', '#3a2a1e'],
+  ['#c9962b', '#8b5a2b'],
+  ['#f2efe6', '#2b2b2b'],
+];
+
+/** One of a list, picked by any whole number. */
+export const pick = <T>(list: readonly T[], n: number): T => list[((n % list.length) + list.length) % list.length];
+
 /** A colour part way between two hex colours. */
 export function mixHex(a: string, b: string, t: number): string {
   const parse = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
