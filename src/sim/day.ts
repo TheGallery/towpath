@@ -282,6 +282,13 @@ export function stepDay(day: Day, plan: DayPlan, controls: Controls, dt: number)
   return noted(day, events);
 }
 
+/** When the evening began, from when the walkers head home, or null before it. Evening, night and dawn each last a set time. */
+export function eveningBegan(day: Day): number | null {
+  const before: Partial<Record<DayPhase, number>> = { evening: 0, night: EVENING_TIME, dawn: EVENING_TIME + NIGHT_TIME, over: EVENING_TIME + NIGHT_TIME + DAWN_TIME };
+  const since = before[day.phase];
+  return since === undefined ? null : day.time - day.phaseTime - since;
+}
+
 /**
  * The light over the canal: how warm the sky's colour is (morning and dusk),
  * how dark it is, and how far the lamps in the boat and the pub are lit, each
