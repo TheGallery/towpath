@@ -3,12 +3,13 @@
 // boats and trees. It also paints the guidebook map that fades in over it,
 // and finds the windows that light up at night.
 
-import { lerp, seededRandom } from '../core/math';
+import { clamp, lerp, seededRandom } from '../core/math';
 import { distanceTo, nearestDistance, poseAt } from '../core/track';
 import type { Point, Pose, Track } from '../core/track';
 import { CANAL_WIDTH, MOORED_OFFSET, TOWPATH_OFFSET } from '../world/dimensions';
 import type { FeatureData, LockData, Stretch } from '../world/stretch';
 import { towpathRuns } from '../world/towpath';
+import type { Grazer } from '../sim/wildlife';
 import { boatMarkup, personMarkup } from './figures';
 import { COLOURS, MAP_COLOURS, livery } from './palette';
 import { circlePath, f1, offsetPath, placed, polygonPath, smoothPath, tag } from './svg';
@@ -31,6 +32,13 @@ export interface Scenery {
   readonly labels: readonly MapLabel[];
   /** Windows that light up in the evening: houses, the pub and moored boats. */
   readonly lamps: readonly Point[];
+  /** Sheep and cows out in the meadows near the canal. */
+  readonly herds: readonly Herd[];
+}
+
+export interface Herd {
+  readonly kind: 'sheep' | 'cow';
+  readonly animals: readonly Grazer[];
 }
 
 /** How a lock sits on its canal, with the bottom gates at -x. */
@@ -47,11 +55,11 @@ const trackOf = (stretch: Stretch, f: FeatureData): Track => {
   return t;
 };
 
-const FIELDS: readonly { colour: string; weight: number; pattern?: string }[] = [
-  { colour: '#a4cd7c', weight: 5 },
-  { colour: '#9cc477', weight: 4 },
-  { colour: '#b2d388', weight: 3 },
-  { colour: '#8fbf6e', weight: 3 },
+const FIELDS: readonly { colour: string; weight: number; pattern?: string; meadow?: boolean }[] = [
+  { colour: '#a4cd7c', weight: 5, meadow: true },
+  { colour: '#9cc477', weight: 4, meadow: true },
+  { colour: '#b2d388', weight: 3, meadow: true },
+  { colour: '#8fbf6e', weight: 3, meadow: true },
   { colour: '#e8cf7a', weight: 2, pattern: 'tp-wheat' },
   { colour: '#c9a77e', weight: 2, pattern: 'tp-plough' },
   { colour: '#e3dc6c', weight: 1 },
@@ -90,6 +98,7 @@ export function paintScenery(stretch: Stretch): Scenery {
       grid[j].push([-pad + i * dx + (edge ? 0 : (r() - 0.5) * dx * 0.48), -pad + j * dy + (edge ? 0 : (r() - 0.5) * dy * 0.47)]);
     }
   }
+  const meadows: (readonly [Point, Point, Point, Point])[] = [];
   const totalWeight = FIELDS.reduce((a, f) => a + f.weight, 0);
   const pickField = () => {
     let x = r() * totalWeight;
@@ -107,6 +116,7 @@ export function paintScenery(stretch: Stretch): Scenery {
     for (let i = 0; i < cols; i++) {
       const d = polygonPath([grid[j][i], grid[j][i + 1], grid[j + 1][i + 1], grid[j + 1][i]]);
       const f = pickField();
+      if (f.meadow) meadows.push([grid[j][i], grid[j][i + 1], grid[j + 1][i + 1], grid[j + 1][i]]);
       base.push(tag('path', { d, fill: f.colour }));
       if (f.pattern) base.push(tag('path', { d, fill: `url(#${f.pattern}-${r() < 0.5 ? 'a' : 'b'})` }));
     }
@@ -338,7 +348,55 @@ export function paintScenery(stretch: Stretch): Scenery {
     .map(([id, gap, rot, c]) => `<pattern id="${id}" width="${gap}" height="${gap}" patternUnits="userSpaceOnUse" patternTransform="rotate(${rot})"><path d="M0 0V${gap}" stroke="${c}" stroke-width="2.4" opacity="0.6"/></pattern>`)
     .join('');
 
-  return { defs, base: base.join(''), top: top.join(''), map: map.join(''), labels: mapLabels(stretch), lamps };
+  const herds = placeHerds(stretch, meadows, (pt) => clearOf(pt, 75) && trees.every(([x, y, rad]) => Math.hypot(x - pt[0], y - pt[1]) > rad + 10) && houses.every((h) => Math.hypot(h.x - pt[0], h.y - pt[1]) > 70) && data.pubs.every((pub) => Math.hypot(pub.at[0] + 50 - pt[0], pub.at[1] - pt[1]) > 220));
+  return { defs, base: base.join(''), top: top.join(''), map: map.join(''), labels: mapLabels(stretch), lamps, herds };
+}
+
+/** How many meadows have animals in, and how far from the canal they can be and still be seen from the boat. */
+const HERDS = 6;
+const HERD_REACH = 360;
+
+/**
+ * Sheep and cows in some of the meadows that the canal passes. They have a
+ * random sequence of their own, so the fields, hedges and trees come out as
+ * they always have for the seed.
+ */
+function placeHerds(stretch: Stretch, meadows: readonly (readonly [Point, Point, Point, Point])[], open: (pt: Point) => boolean): Herd[] {
+  const r = seededRandom(stretch.data.seed ^ 0x5ee9);
+  const canals = [...stretch.waterways.values()];
+  const inWood = ([x, y]: Point) => stretch.data.woods.some((w) => ((x - w.centre[0]) / (w.radius[0] + 40)) ** 2 + ((y - w.centre[1]) / (w.radius[1] + 40)) ** 2 < 1);
+  const inPond = ([x, y]: Point) => stretch.data.ponds.some((p) => ((x - p.centre[0]) / (p.radius[0] + 40)) ** 2 + ((y - p.centre[1]) / (p.radius[1] + 40)) ** 2 < 1);
+  // A point inside a field, kept in from its hedges.
+  const within = (q: readonly [Point, Point, Point, Point], u: number, v: number): Point => {
+    const top = [lerp(q[0][0], q[1][0], u), lerp(q[0][1], q[1][1], u)];
+    const foot = [lerp(q[3][0], q[2][0], u), lerp(q[3][1], q[2][1], u)];
+    return [lerp(top[0], foot[0], v), lerp(top[1], foot[1], v)];
+  };
+  const near = meadows.filter((q) => {
+    const mid = within(q, 0.5, 0.5);
+    return canals.some((t) => distanceTo(t, mid) < HERD_REACH);
+  });
+  const herds: Herd[] = [];
+  for (let n = 0; n < HERDS && near.length; n++) {
+    const q = near.splice(Math.floor(r() * near.length), 1)[0];
+    const kind = n % 3 === 2 ? 'cow' : 'sheep';
+    const want = kind === 'sheep' ? 8 + Math.floor(r() * 6) : 5 + Math.floor(r() * 3);
+    // They graze near one another, about a spot in the field.
+    const hub = [0.3 + 0.4 * r(), 0.3 + 0.4 * r()];
+    const facing = r() * Math.PI * 2;
+    const animals: Grazer[] = [];
+    for (let tries = 0; animals.length < want && tries < want * 12; tries++) {
+      const u = clamp(hub[0] + (r() - 0.5) * 0.5, 0.12, 0.88);
+      const v = clamp(hub[1] + (r() - 0.5) * 0.5, 0.12, 0.88);
+      const pt = within(q, u, v);
+      const inWorld = pt[0] > 20 && pt[0] < stretch.data.size.width - 20 && pt[1] > 20 && pt[1] < stretch.data.size.height - 20;
+      if (!inWorld || !open(pt) || inWood(pt) || inPond(pt)) continue;
+      if (animals.some((a) => Math.hypot(a.x - pt[0], a.y - pt[1]) < (kind === 'sheep' ? 16 : 30))) continue;
+      animals.push({ x: pt[0], y: pt[1], angle: facing + (r() - 0.5) * 2.4, look: Math.floor(r() * 1000) });
+    }
+    if (animals.length >= 3) herds.push({ kind, animals });
+  }
+  return herds;
 }
 
 function lockStonework(): string {

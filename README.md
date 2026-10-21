@@ -19,6 +19,8 @@ The first prototype is complete: all five build steps are in, so you can play a 
 - **The junction.** Answer the junction call and the map opens with both ways marked. Pick one on the map, from the list, or with <kbd>1</kbd> and <kbd>2</kbd>.
 - **Dusk, night and morning.** The light goes as the boat nears its mooring. Choose one of the marked spots, and the boat glides in and ties up. Evening falls and the lamps come on in the boats, the houses and the pub, then night, then dawn: the end of the prototype day, ready to start another.
 - **Life on the bank.** Walkers, joggers and dogs use the towpath all day: each comes on at a bridge or an end of the path, goes out a way, turns and goes back, keeping left as they pass. In the evening everyone still out turns for home, and the towpath is empty by the end of the night.
+- **Life around the boat.** The boat leaves a wake of ripples behind it in the water, which spread to the banks and fade, with a faint trail along the way it has come. Ducks with their ducklings and pairs of swans swim slowly along the far bank and ease out of the way as a boat comes by, fish rise now and then, sheep and cows graze the meadows, and soft cloud shadows drift over the land and water.
+- **The weather.** Each day has its own weather from the canal's seed and the day's number: some mornings are misty, and the mist lifts after you cast off and gathers again at dawn; some days a spell of drizzle comes and goes while you're underway. It changes only the look of the day, never how the boat goes.
 - **The logbook.** The day is noted as it happens (casting off, the lock and how you found it, the way you took at the junction, where you moored, and how long the boat waited for you) and written up in the evening. Press <kbd>L</kbd>, or the Logbook button, to read it; the canal's seed is at the foot of the page.
 - **Keeping your place.** Close the tab or reload it whenever you like: the game keeps your place in the browser and carries on exactly where it was, whether mid-lock or at night. Time doesn't pass while the tab is closed, so the boat is waiting where you left it.
 - **Time keeps running.** The game keeps time by the clock, so the boat carries on while the tab is in the background. Browsers slow a hidden tab's timers to once a minute after a while, so a call can ring up to a minute late; the boat still stops at the right place and says how long it has waited.
@@ -54,7 +56,7 @@ Run the game:
 npm run dev      # open the printed local URL
 ```
 
-To try things out without waiting, add `?speed=10` to the address to run the game ten times faster (anything from 0.25 to 60 works): a whole day then takes about two minutes, plus the lock. Add `?lock=ready` or `?lock=against` (or both, as `?speed=10&lock=against`) to choose how the other boat leaves Brook Lock on a new day. The game keeps your place between visits, so add `?fresh` to set it aside and start a new day.
+To try things out without waiting, add `?speed=10` to the address to run the game ten times faster (anything from 0.25 to 60 works): a whole day then takes about two minutes, plus the lock. Add `?weather=mist`, `?weather=drizzle` or `?weather=clear` to choose the weather for every day (drizzle then falls from when you cast off until the evening). Add `?lock=ready` or `?lock=against` (or both, as `?speed=10&lock=against`) to choose how the other boat leaves Brook Lock on a new day. The game keeps your place between visits, so add `?fresh` to set it aside and start a new day.
 
 `npm run build` writes a static build to `dist/`, and `npm run preview` serves it.
 
@@ -71,9 +73,9 @@ The game's rules are kept apart from the drawing, so they can be tested without 
 
 - `src/core`: tracks (smooth curves sampled by distance), the fixed-step clock and small maths helpers.
 - `src/world`: the stretch of canal, stored the way a map generator will make it: canals as points, a branch leaving its parent at a junction, features placed by distance along a canal, the ways a day can go and the moorings they end at, the towpath and its ways on and off, and a seed for the scenery.
-- `src/sim`: the boat's steering, the lock's rules (water, gates and paddles, and the next job from any state), the hands-on paddle and gate in the close-ups, the other boat, the trip along one way, the boat's calls, the day from morning to morning (the junction choice, mooring, and the light), the logbook, the people on the towpath, the kept place (versioned, so a stale or broken one starts a fresh day), and the words for what's happening.
+- `src/sim`: the boat's steering, the lock's rules (water, gates and paddles, and the next job from any state), the hands-on paddle and gate in the close-ups, the other boat, the trip along one way, the boat's calls, the day from morning to morning (the junction choice, mooring, and the light), the logbook, the people on the towpath, the day's weather and the clouds, the fish, birds and animals, the kept place (versioned, so a stale or broken one starts a fresh day), and the words for what's happening.
 - `src/view`: the camera, as plain maths.
-- `src/render` and `src/ui`: the SVG painting (including the lock close-ups, the night and the people on the towpath), the panels, the full-screen close-up, the logbook page, the keyboard and the bell.
+- `src/render` and `src/ui`: the SVG painting (including the lock close-ups, the night, the people on the towpath, the wake, and the life and weather around the boat), the panels, the full-screen close-up, the logbook page, the keyboard and the bell.
 
 CI runs the same four checks on every pull request and every push to `main`, and zizmor audits the GitHub Actions workflows.
 
