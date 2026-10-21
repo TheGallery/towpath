@@ -8,6 +8,7 @@ import { distanceTo, nearestDistance, poseAt } from '../core/track';
 import type { Point, Pose, Track } from '../core/track';
 import { CANAL_WIDTH, MOORED_OFFSET, TOWPATH_OFFSET } from '../world/dimensions';
 import type { FeatureData, LockData, Stretch } from '../world/stretch';
+import { towpathRuns } from '../world/towpath';
 import { boatMarkup, personMarkup } from './figures';
 import { COLOURS, MAP_COLOURS, livery } from './palette';
 import { circlePath, f1, offsetPath, placed, polygonPath, smoothPath, tag } from './svg';
@@ -176,15 +177,7 @@ export function paintScenery(stretch: Stretch): Scenery {
   }
   for (const w of stretch.ways) base.push(tag('path', { d: offsetPath(w.route, 0, 0, w.end), stroke: COLOURS.waterLight, 'stroke-width': 1.5, fill: 'none', opacity: 0.35, 'stroke-dasharray': '24 60' }));
 
-  // The towpath runs along the right-hand bank of the first way, and on along
-  // any canal it turns off, which the other ways follow.
-  let towpath = offsetPath(first.route, TOWPATH_OFFSET, 0, first.mooring.kind === 'basin' ? first.end - 120 : first.route.length);
-  for (const j of first.junctions) {
-    if (!j.turns) continue;
-    const parentId = j.branch.leaves?.waterway;
-    const parent = parentId ? stretch.waterways.get(parentId) : undefined;
-    if (parent) towpath += offsetPath(parent, TOWPATH_OFFSET, nearestDistance(parent, j.point) + 70, parent.length);
-  }
+  const towpath = towpathRuns(stretch).map((run) => offsetPath(run.track, TOWPATH_OFFSET, run.from, run.to)).join('');
   base.push(tag('path', { d: towpath, stroke: COLOURS.towpathEdge, 'stroke-width': 15, fill: 'none', 'stroke-linejoin': 'round' }));
   base.push(tag('path', { d: towpath, stroke: COLOURS.towpath, 'stroke-width': 11, fill: 'none', 'stroke-linejoin': 'round' }));
   for (const d of canalPaths) map.push(tag('path', { d, stroke: MAP_COLOURS.water, 'stroke-width': 26, fill: 'none', 'stroke-linejoin': 'round' }));

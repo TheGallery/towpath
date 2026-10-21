@@ -17,6 +17,7 @@
         <div class="hud-actions">
           <span class="rate" id="rate" hidden></span>
           <button type="button" class="map-button bell-button" id="bell-button" aria-pressed="true" aria-label="Bell" title="The bell rings when the boat needs you"><span aria-hidden="true">🔔</span><span class="bell-text" id="bell-text">Bell on</span></button>
+          <button type="button" class="map-button logbook-button" id="logbook-button" aria-keyshortcuts="L" hidden><span>Logbook</span> <kbd>L</kbd></button>
           <button type="button" class="map-button" id="map-button" aria-pressed="false" aria-keyshortcuts="M">
             <span id="map-button-text">Map</span> <kbd>M</kbd>
           </button>
@@ -82,6 +83,7 @@
             <li><span><kbd>Space</kbd></span> Answer the boat's call: work the lock, choose a way, or choose where to moor.</li>
             <li><span><kbd>1</kbd><kbd>2</kbd></span> Pick an answer when the boat asks you to choose.</li>
             <li><span><kbd>M</kbd></span> Open the map, and press it again to come back.</li>
+            <li><span><kbd>L</kbd></span> Read the logbook, once the day is written up in the evening.</li>
           </ul>
           <button type="button" class="primary" id="cast-off">Cast off</button>
         </div>
@@ -91,7 +93,24 @@
         <div class="card">
           <h2 id="end-title"></h2>
           <p id="end-text"></p>
-          <button type="button" class="primary" id="again"></button>
+          <div class="card-buttons">
+            <button type="button" class="primary" id="again"></button>
+            <button type="button" class="secondary" id="end-logbook">Read the logbook</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card-screen logbook-screen" id="logbook" role="dialog" aria-modal="true" aria-labelledby="logbook-title" hidden>
+        <div class="card logbook">
+          <div class="logbook-head">
+            <h2 id="logbook-title">Logbook</h2>
+            <p class="logbook-day" id="logbook-day"></p>
+          </div>
+          <ol class="logbook-lines" id="logbook-lines"></ol>
+          <div class="logbook-foot">
+            <p class="logbook-seed" id="logbook-seed"></p>
+            <button type="button" class="logbook-close" id="logbook-close">Close <kbd>Esc</kbd></button>
+          </div>
         </div>
       </section>
 

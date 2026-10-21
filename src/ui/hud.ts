@@ -14,6 +14,8 @@ export interface HudState {
   readonly mph: number;
   readonly next: Upcoming | null;
   readonly mapOpen: boolean;
+  /** True once the day is written up in the logbook, ready to read. */
+  readonly logbook: boolean;
   /** What the boat needs you for, as the call button's words, or null when it needs nothing. */
   readonly call: string | null;
   /** How long it has waited for you, in words, once that's long enough to say. */
@@ -40,6 +42,7 @@ export interface HudOptions {
   readonly onToggleMap: () => void;
   readonly onCall: () => void;
   readonly onBell: (on: boolean) => void;
+  readonly onLogbook: () => void;
 }
 
 const TOAST_TIME = 4500;
@@ -73,6 +76,8 @@ export class Hud {
   private readonly choiceTitle: HTMLElement;
   private readonly choiceOptions: HTMLElement;
   private readonly bellButton: HTMLButtonElement;
+  private readonly bellText: HTMLElement;
+  private readonly logbookButton: HTMLButtonElement;
   private readonly endTitle: HTMLElement;
   private readonly endText: HTMLElement;
   private choice: Choice | null = null;
@@ -102,11 +107,13 @@ export class Hud {
     this.choiceTitle = byId(doc, 'choice-title');
     this.choiceOptions = byId(doc, 'choice-options');
     this.bellButton = byId(doc, 'bell-button');
+    this.bellText = byId(doc, 'bell-text');
+    this.logbookButton = byId(doc, 'logbook-button');
     this.endTitle = byId(doc, 'end-title');
     this.endText = byId(doc, 'end-text');
 
     const minutes = Math.round(options.dayMinutes);
-    byId(doc, 'start-text').textContent = `Your narrowboat is moored at ${options.startName}. Cast off and it cruises by itself. When it needs you, at the lock, at the junction and at dusk, a soft bell rings and the tab's title says so. If you're busy, it waits. A day, from morning to morning, takes about ${minutes} minutes.`;
+    byId(doc, 'start-text').textContent = `Your narrowboat is moored at ${options.startName}. Cast off and it cruises by itself. When it needs you, at the lock, at the junction and at dusk, a soft bell rings and the tab's title says so. If you're busy, it waits, and if you close the tab it keeps your place. A day, from morning to morning, takes about ${minutes} minutes.`;
     this.againButton.textContent = `Start a new day from ${options.startName}`;
 
     const rate = byId(doc, 'rate');
@@ -119,14 +126,20 @@ export class Hud {
     this.againButton.addEventListener('click', options.onStartAgain);
     this.mapButton.addEventListener('click', options.onToggleMap);
     this.callButton.addEventListener('click', options.onCall);
-    const bellText = byId(doc, 'bell-text');
     this.bellButton.addEventListener('click', () => {
       const on = this.bellButton.getAttribute('aria-pressed') !== 'true';
-      this.bellButton.setAttribute('aria-pressed', String(on));
-      bellText.textContent = on ? 'Bell on' : 'Bell off';
+      this.setBell(on);
       options.onBell(on);
     });
+    this.logbookButton.addEventListener('click', options.onLogbook);
+    byId(doc, 'end-logbook').addEventListener('click', options.onLogbook);
     this.castOffButton.focus();
+  }
+
+  /** Shows the bell as on or off. */
+  setBell(on: boolean): void {
+    this.bellButton.setAttribute('aria-pressed', String(on));
+    this.bellText.textContent = on ? 'Bell on' : 'Bell off';
   }
 
   /** Changes the text of an element only when it differs, so screen readers aren't flooded. */
@@ -165,6 +178,7 @@ export class Hud {
       this.root.classList.toggle('map-open', state.mapOpen);
     }
     this.mapKey.hidden = !state.mapOpen || this.choice !== null;
+    this.logbookButton.hidden = !state.logbook;
 
     if (this.shown.phase !== state.phase) {
       const was = this.shown.phase;

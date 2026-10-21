@@ -27,3 +27,13 @@ export const WAKE_PATH = 'M-38 -4L-80 -15M-38 4L-80 15M-38 0L-70 0';
 /** A person seen from above: shoulders and a head. */
 export const personMarkup = (coat: string, hat: string): string =>
   tag('ellipse', { rx: 2.3, ry: 4, fill: coat }) + tag('circle', { r: 2, fill: hat });
+
+/** A dog seen from above, nose to the right. */
+export const dogMarkup = (coat: string, ears: string): string =>
+  [
+    tag('path', { d: 'M-4 0Q-7 -0.6 -8.4 -2.2', stroke: coat, 'stroke-width': 1.1, 'stroke-linecap': 'round', fill: 'none' }),
+    tag('ellipse', { rx: 4.2, ry: 1.9, fill: coat }),
+    tag('circle', { cx: 4.3, r: 1.7, fill: coat }),
+    tag('ellipse', { cx: 3.9, cy: -1.5, rx: 0.9, ry: 0.6, fill: ears }),
+    tag('ellipse', { cx: 3.9, cy: 1.5, rx: 0.9, ry: 0.6, fill: ears }),
+  ].join('');
