@@ -115,39 +115,12 @@ describe('keeping your place', () => {
   });
 });
 
-/** A day kept as version 1 kept it, when calls went by their kind alone and a day had one fork. */
-function versionOne(day: Day): string {
-  const s = JSON.parse(saveGame(keep(day), HALLAM));
-  const bare = (key: string) => key.split(':')[0];
-  s.version = 1;
-  s.day.chosen = s.day.ways.length === 1;
-  delete s.day.ways;
-  if (s.day.calls.open) delete s.day.calls.open.place;
-  s.day.calls.answered = s.day.calls.answered.map(bare);
-  for (const times of [s.day.log.waiting, s.day.log.waited]) {
-    for (const [key, t] of Object.entries(times)) {
-      delete times[key];
-      times[bare(key)] = t;
+describe('a kept place from before the canals were redrawn', () => {
+  it.each(MOMENTS)('is set aside, so the boat never starts where its places have moved: %s', (_, day) => {
+    for (const version of [1, 2]) {
+      const old = { ...JSON.parse(saveGame(keep(day), HALLAM)), version };
+      expect(loadGame(JSON.stringify(old), plan, HALLAM)).toBeNull();
     }
-  }
-  return JSON.stringify(s);
-}
-
-describe('a kept place from the version before', () => {
-  it.each(MOMENTS)('reads back as it would be kept now: %s', (_, day) => {
-    const kept = loadGame(versionOne(day), plan, HALLAM);
-    expect(kept?.day).toEqual(day);
-  });
-
-  it('reads the junction waited at and the way chosen, before and after choosing', () => {
-    const day = newDay(plan, { other: 'down', crewed: true });
-    castOffDay(day);
-    while (!day.held) stepDay(day, plan, NO_CONTROLS, 0.25);
-    expect(day.calls.open).toMatchObject({ kind: 'junction', place: 'Wendle Junction' });
-    expect(loadGame(versionOne(day), plan, HALLAM)?.day).toEqual(day);
-    chooseWay(day, plan, 'main');
-    expect(day.ways).toEqual(['main']);
-    expect(loadGame(versionOne(day), plan, HALLAM)?.day).toEqual(day);
   });
 });
 

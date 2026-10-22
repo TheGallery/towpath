@@ -4,11 +4,11 @@
 // and finds the windows that light up at night.
 
 import { clamp, lerp, seededRandom } from '../core/math';
-import { distanceTo, nearestDistance, poseAt } from '../core/track';
+import { buildTrack, distanceTo, nearestDistance, poseAt } from '../core/track';
 import type { Point, Pose, Track } from '../core/track';
-import { BASIN_CORNER, BRIDGE_DECK, CANAL_WIDTH, MOORED_OFFSET, TOWPATH_OFFSET } from '../world/dimensions';
-import { towpathSide } from '../world/stretch';
-import type { FeatureData, LockData, Stretch } from '../world/stretch';
+import { BASIN_CORNER, BRIDGE_DECK, CANAL_WIDTH, LOCK_REACH, LOCK_WIDTH, MOORED_OFFSET, TOWPATH_OFFSET } from '../world/dimensions';
+import { JUNCTION_ROUND, towpathSide } from '../world/stretch';
+import type { FeatureData, LockData, Stretch, Way } from '../world/stretch';
 import { towpathRuns } from '../world/towpath';
 import type { Grazer } from '../sim/wildlife';
 import { boatMarkup, personMarkup } from './figures';
@@ -58,6 +58,27 @@ const trackOf = (stretch: Stretch, f: FeatureData): Track => {
   return t;
 };
 
+/**
+ * The pieces of each way's route where it rounds the corner into a branch.
+ * Everywhere else the route lies along its waterways' own curves.
+ */
+function corners(way: Way): Track[] {
+  const reach = JUNCTION_ROUND + 40;
+  return way.junctions
+    .filter((j) => j.turns)
+    .map((j) => {
+      const points: Point[] = [];
+      const { ss, xs, ys } = way.route;
+      for (let i = 0; i < ss.length; i++) {
+        if (Math.abs(ss[i] - j.s) > reach) continue;
+        const edge = i === 0 || i === ss.length - 1 || Math.abs(ss[i - 1] - j.s) > reach || Math.abs(ss[i + 1] - j.s) > reach;
+        if (edge || i % 4 === 0) points.push([xs[i], ys[i]]);
+      }
+      return points.length >= 2 ? buildTrack(points, 5) : null;
+    })
+    .filter((t): t is Track => t !== null);
+}
+
 const FIELDS: readonly { colour: string; weight: number; pattern?: string; meadow?: boolean }[] = [
   { colour: '#a4cd7c', weight: 5, meadow: true },
   { colour: '#9cc477', weight: 4, meadow: true },
@@ -80,7 +101,7 @@ export function paintScenery(stretch: Stretch): Scenery {
   const footbridges: string[] = [];
   const top: string[] = [];
   const map: string[] = [];
-  const canals = [...stretch.waterways.values(), ...stretch.ways.map((w) => w.route)];
+  const canals = [...stretch.waterways.values(), ...stretch.ways.flatMap(corners)];
   const roads = [...stretch.roads.values()];
   const basins = data.features.filter((f) => f.kind === 'basin');
   const clearOf = (pt: Point, gap: number): boolean =>
@@ -407,11 +428,11 @@ function placeHerds(stretch: Stretch, meadows: readonly (readonly [Point, Point,
 
 function lockStonework(): string {
   return [
-    tag('rect', { x: -122, y: -54, width: 244, height: 108, rx: 10, fill: COLOURS.coping, stroke: COLOURS.copingEdge, 'stroke-width': 2 }),
+    tag('rect', { x: -LOCK_REACH, y: -54, width: 2 * LOCK_REACH, height: 108, rx: 10, fill: COLOURS.coping, stroke: COLOURS.copingEdge, 'stroke-width': 2 }),
     ...[-90, -60, -30, 0, 30, 60, 90].map((x) => tag('path', { d: `M${x} -54V-14M${x} 14V54`, stroke: '#d5ccb8', 'stroke-width': 1.5 })),
-    tag('rect', { x: -122, y: -9, width: 244, height: 18, fill: '#7d7466' }),
-    tag('rect', { x: -122, y: -9, width: 50, height: 18, fill: COLOURS.water }),
-    tag('rect', { x: 72, y: -9, width: 50, height: 18, fill: COLOURS.water }),
+    tag('rect', { x: -LOCK_REACH, y: -LOCK_WIDTH / 2, width: 2 * LOCK_REACH, height: LOCK_WIDTH, fill: '#7d7466' }),
+    tag('rect', { x: -LOCK_REACH, y: -LOCK_WIDTH / 2, width: LOCK_REACH - 72, height: LOCK_WIDTH, fill: COLOURS.water }),
+    tag('rect', { x: 72, y: -LOCK_WIDTH / 2, width: LOCK_REACH - 72, height: LOCK_WIDTH, fill: COLOURS.water }),
     ...[[-86, -18], [-86, 18], [86, -18], [86, 18]].map(([x, y]) => tag('rect', { x: x - 3.5, y: y - 3.5, width: 7, height: 7, rx: 1, fill: '#2b2b2b' })),
   ].join('');
 }

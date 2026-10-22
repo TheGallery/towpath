@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { distanceTo, nearestDistance, poseAt } from '../src/core/track';
-import { BOAT_LENGTH, BRIDGE_DECK, MOORED_OFFSET } from '../src/world/dimensions';
+import { BOAT_LENGTH, BRIDGE_DECK, CANAL_WIDTH, MOORED_OFFSET } from '../src/world/dimensions';
 import { HALLAM } from '../src/world/hallam';
 import { checkStretch, resolveStretch, waterwayCurve } from '../src/world/stretch';
-import type { StretchData } from '../src/world/stretch';
+import type { StretchData, WaterwayData } from '../src/world/stretch';
+import { FORKS } from './fixtures/forks';
 
 const stretch = resolveStretch(HALLAM);
 const [arm, main] = stretch.ways;
@@ -41,7 +42,7 @@ describe('the Hallam stretch', () => {
   });
 
   it('shares one route between the ways until just before the junction', () => {
-    for (let s = 0; s < arm.junctions[0].s - 380; s += 20) {
+    for (let s = 0; s < arm.junctions[0].s - 70; s += 20) {
       const p = poseAt(arm.route, s);
       const q = poseAt(main.route, s);
       expect(Math.hypot(p.x - q.x, p.y - q.y)).toBeLessThan(0.01);
@@ -61,12 +62,23 @@ describe('the Hallam stretch', () => {
     }
   });
 
-  it('turns into the arm smoothly, along the same curve the arm is drawn with', () => {
+  it('turns into the arm along the curve the arm is drawn with, rounding just the corner', () => {
     const curve = stretch.waterways.get('wendle-arm');
     if (!curve) throw new Error('no arm');
-    for (let s = 0; s < curve.length; s += 25) {
+    for (let s = 0; s < curve.length; s += 5) {
       const p = poseAt(curve, s);
-      expect(distanceTo(arm.route, [p.x, p.y])).toBeLessThan(4);
+      expect(distanceTo(arm.route, [p.x, p.y])).toBeLessThan(s < 70 ? CANAL_WIDTH / 2 : 3);
+    }
+  });
+
+  it('follows the main line as it is drawn right up to the junction, without swinging out over the bank', () => {
+    const canal = stretch.waterways.get('hallam');
+    if (!canal) throw new Error('no main line');
+    for (let s = 0; s < arm.junctions[0].s; s += 5) {
+      const p = poseAt(arm.route, s);
+      // How far off the canal's centre line, square to it.
+      const q = poseAt(canal, nearestDistance(canal, [p.x, p.y]));
+      expect(Math.abs((p.x - q.x) * q.nx + (p.y - q.y) * q.ny)).toBeLessThan(s < arm.junctions[0].s - 70 ? 1.5 : CANAL_WIDTH / 2);
     }
   });
 
@@ -158,6 +170,11 @@ describe('checkStretch', () => {
     expect(problems.some((p) => p.includes('brook-lock'))).toBe(true);
   });
 
+  it('notices a lock on a bend, where its straight walls would not fit the canal', () => {
+    const problems = broken((d) => ({ ...d, features: d.features.map((f) => (f.id === 'brook-lock' ? { ...f, at: 3000 } : f)) }));
+    expect(problems).toContain("brook-lock isn't on a straight reach of hallam");
+  });
+
   it('notices moored boats on top of each other', () => {
     const problems = broken((d) => ({
       ...d,
@@ -192,6 +209,36 @@ describe('checkStretch', () => {
   it('notices no footbridge to carry the towpath over the arm by the junction', () => {
     const problems = broken((d) => ({ ...d, features: d.features.filter((f) => f.kind !== 'footbridge') }));
     expect(problems).toContain('no footbridge carries the towpath over wendle-arm by its junction');
+  });
+
+  it('notices a way that turns at a junction too near the start of its canal to round the corner', () => {
+    const problems = checkStretch({
+      ...FORKS,
+      waterways: FORKS.waterways.map((w) => (w.id === 'ashby' ? { ...w, points: [[2760, 1981], [2800, 1980], [2840, 1981], ...w.points.slice(5)] } : w.leaves ? { ...w, leaves: { ...w.leaves, atPoint: w.leaves.atPoint === 4 ? 1 : 5 } } : w)),
+      trip: { ...FORKS.trip, from: { ...FORKS.trip.from, at: 10 } },
+    });
+    expect(problems).toContain('the way north turns at Elm Junction too near the start of ashby to round the corner');
+  });
+
+  it('notices a way that turns again too soon after turning into a branch', () => {
+    const problems = checkStretch({
+      ...FORKS,
+      waterways: [
+        ...FORKS.waterways.map((w): WaterwayData => {
+          if (w.id === 'ashby') return { ...w, points: [...w.points.slice(0, 7), [5060, 1952], ...w.points.slice(7)] };
+          if (w.id === 'mill-arm') return { ...w, points: [[5120, 1990], [5140, 2030], [5160, 2070], ...w.points], leaves: { waterway: 'ashby', atPoint: 8, junction: 'Bramble Junction' } };
+          return w;
+        }),
+        { id: 'mill-cut', name: 'Mill Cut', points: [[5300, 2060], [5600, 2100]], leaves: { waterway: 'mill-arm', atPoint: 1, junction: 'Cut End' } },
+      ],
+      trip: { ...FORKS.trip, ways: [...FORKS.trip.ways, { id: 'cut', route: ['ashby', 'mill-arm', 'mill-cut'], to: 'mill-basin' }] },
+    });
+    expect(problems).toContain('the way cut turns at Cut End too soon after turning at Bramble Junction to round the corner');
+  });
+
+  it('notices a way that turns into a branch too short to round the corner into', () => {
+    const problems = checkStretch({ ...FORKS, waterways: FORKS.waterways.map((w) => (w.id === 'ferry-arm' ? { ...w, points: [[2810, 2015]] } : w)) });
+    expect(problems).toContain('the way south turns into ferry-arm, which is too short to round the corner into');
   });
 
   it('notices a way that ends somewhere you cannot moor', () => {
