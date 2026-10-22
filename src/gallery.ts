@@ -6,7 +6,7 @@
 
 import { poseAt } from './core/track';
 import type { Track } from './core/track';
-import { makeCanal } from './sim/playable';
+import { MAX_SEED, makeCanal } from './sim/playable';
 import { MADE_SIZE, dayShape } from './world/generate';
 import { resolveStretch } from './world/stretch';
 
@@ -15,7 +15,7 @@ const PER_PAGE = 24;
 
 const params = new URLSearchParams(window.location.search);
 const asked = params.has('from') ? Number(params.get('from')) : NaN;
-const from = Number.isSafeInteger(asked) && asked >= 0 ? asked : 1;
+const from = Number.isSafeInteger(asked) && asked >= 0 ? Math.min(asked, MAX_SEED - PER_PAGE + 1) : 1;
 
 document.title = `Canals from seed ${from} · Towpath`;
 document.head.insertAdjacentHTML(
@@ -35,7 +35,7 @@ document.head.insertAdjacentHTML(
 document.body.innerHTML = `
   <h1>Canals made from seeds ${from} to ${from + PER_PAGE - 1}</h1>
   <p class="about">Each opens the game on that canal. Blue: canals; grey: roads; dark ticks: locks; red: pubs; green: woods.</p>
-  <nav>${from > 0 ? `<a href="?gallery&from=${Math.max(0, from - PER_PAGE)}">Earlier seeds</a>` : ''}<a href="?gallery&from=${from + PER_PAGE}">Later seeds</a></nav>
+  <nav>${from > 0 ? `<a href="?gallery&from=${Math.max(0, from - PER_PAGE)}">Earlier seeds</a>` : ''}${from + PER_PAGE <= MAX_SEED ? `<a href="?gallery&from=${from + PER_PAGE}">Later seeds</a>` : ''}</nav>
   <div class="grid" id="grid"></div>`;
 
 /** A track as an SVG path, every few samples, which is plenty at this size. */
