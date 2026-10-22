@@ -533,6 +533,12 @@ export function checkStretch(data: StretchData): string[] {
         if (i === 1 && at <= JUNCTION_ROUND) problems.push(`the way ${way.id} turns at ${junction} too near the start of ${way.route[0]} to round the corner`);
         if (i > 1 && at <= 2 * JUNCTION_ROUND) problems.push(`the way ${way.id} turns at ${junction} too soon after turning at ${follows[i - 1]?.leaves?.junction} to round the corner`);
         if (branch.length <= JUNCTION_ROUND + 10) problems.push(`the way ${way.id} turns into ${way.route[i]}, which is too short to round the corner into`);
+        // A lock and its landings stay on the straight, clear of where the route rounds the corner, or the boat would swing across its walls.
+        for (const f of data.features) {
+          if (f.kind !== 'lock') continue;
+          const off = f.waterway === way.route[i - 1] ? Math.abs(f.at - at) : f.waterway === way.route[i] ? f.at : Infinity;
+          if (off < LOCK_STRAIGHT + JUNCTION_ROUND) problems.push(`${f.id} is too near ${junction} for the way ${way.id} to round the corner clear of it`);
+        }
       }
     }
   }

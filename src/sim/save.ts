@@ -1,22 +1,20 @@
 // Keeping your place: the whole day written down as plain data, so closing
 // the tab or reloading it carries on where you were. A kept place says which
-// version of the format it is and which stretch it's on. One from the version
-// before, when a day had one lock and one junction to call you to, is read
-// into this one. One from an older or newer version or another stretch, or
-// broken in any way, is set aside, and a fresh day starts instead.
+// version of the format it is and which stretch it's on. One from an older or
+// newer version or another stretch, or broken in any way, is set aside, and a
+// fresh day starts instead.
 
 import type { StretchData } from '../world/stretch';
 import { callKey } from './calls';
 import type { Call, CallKind } from './calls';
-import { forkAhead } from './day';
 import type { Day, DayPhase, DayPlan, Glide, Placed } from './day';
 import type { LogEntry, Logbook } from './logbook';
 import type { Crew, LockState, Part } from './lock';
 import type { OtherBoat, OtherWay } from './otherboat';
 import type { Passage, Trip, TripPhase, TripPlan } from './trip';
 
-/** Bump this whenever the shape of a kept place changes, so older ones are set aside or read across. */
-export const SAVE_VERSION = 2;
+/** Bump this whenever the shape of a kept place changes, or where its places fall along the ways, so older ones are set aside. */
+export const SAVE_VERSION = 3;
 
 /** Everything kept between visits: the day, how the next day's lock will be, and whether the bell is on. */
 export interface Kept {
@@ -98,12 +96,6 @@ const readKey = (v: unknown, what: string): string => {
   return key;
 };
 
-/**
- * Turns a key from version 1, when calls were kept by kind alone, into this
- * version's: its one lock call was for the first lock on the way, and its one
- * junction call for where the ways first part.
- */
-type Rekey = (key: string) => string;
 const OTHER_WAYS: readonly OtherWay[] = ['down', 'up'];
 const PARTS: readonly Part[] = ['bottomGates', 'topGates', 'bottomPaddle', 'topPaddle'];
 
@@ -115,21 +107,18 @@ export function loadGame(text: string | null, plan: DayPlan, stretch: StretchDat
   if (!text) return null;
   try {
     const raw = record(JSON.parse(text), 'save');
-    if ((raw.version !== SAVE_VERSION && raw.version !== 1) || raw.stretch !== stretch.id || raw.seed !== stretch.seed) return null;
-    return { day: readDay(record(raw.day, 'day'), plan, raw.version === 1), other: oneOf(raw.other, OTHER_WAYS, 'other'), bell: bool(raw.bell, 'bell') };
+    if (raw.version !== SAVE_VERSION || raw.stretch !== stretch.id || raw.seed !== stretch.seed) return null;
+    return { day: readDay(record(raw.day, 'day'), plan), other: oneOf(raw.other, OTHER_WAYS, 'other'), bell: bool(raw.bell, 'bell') };
   } catch (e) {
     if (e instanceof BadSave || e instanceof SyntaxError || e instanceof TypeError || e instanceof RangeError) return null;
     throw e;
   }
 }
 
-function readDay(raw: Raw, plan: DayPlan, versionOne: boolean): Day {
+function readDay(raw: Raw, plan: DayPlan): Day {
   const way = plan.ways.find((w) => w.way === raw.way) ?? fail('way');
   const all = plan.ways.map((w) => w.way);
-  const firstLock = plan.ways[0].locks[0]?.id;
-  const firstFork = forkAhead({ ways: all, plan: plan.ways[0] }, plan)?.name;
-  const rekey: Rekey = (key) => (!versionOne ? key : key === 'lock' ? callKey('lock', firstLock) : key === 'junction' ? callKey('junction', firstFork) : key);
-  const ways = versionOne ? (bool(raw.chosen, 'chosen') ? [way.way] : all) : list(raw.ways, 'ways').map((w) => oneOf(str(w, 'ways'), all, 'ways'));
+  const ways = list(raw.ways, 'ways').map((w) => oneOf(str(w, 'ways'), all, 'ways'));
   if (!ways.includes(way.way)) fail('way not among the ways');
   const spotIndex = orNull(raw.spot, (v) => int(v, 'spot', 0, way.spots.length - 1));
   const spot = spotIndex === null ? null : way.spots[spotIndex];
@@ -153,11 +142,11 @@ function readDay(raw: Raw, plan: DayPlan, versionOne: boolean): Day {
     spot,
     glide,
     calls: {
-      open: orNull(callsRaw.open, (v) => readCall(v, rekey)),
-      answered: new Set(list(callsRaw.answered, 'answered').map((k) => rekey(readKey(k, 'answered')))),
+      open: orNull(callsRaw.open, readCall),
+      answered: new Set(list(callsRaw.answered, 'answered').map((k) => readKey(k, 'answered'))),
     },
     trip: readTrip(record(raw.trip, 'trip'), way, plan),
-    log: readLog(record(raw.log, 'log'), rekey),
+    log: readLog(record(raw.log, 'log')),
   };
 }
 
@@ -166,11 +155,11 @@ function readPlaced(v: unknown): Placed {
   return { x: num(raw.x, 'x'), y: num(raw.y, 'y'), angle: num(raw.angle, 'angle') };
 }
 
-function readCall(v: unknown, rekey: Rekey): Call {
+function readCall(v: unknown): Call {
   const raw = record(v, 'call');
   const kind = oneOf(raw.kind, CALLS, 'call');
   // A call's place is the rest of its key after the kind.
-  const key = rekey(raw.place === undefined ? kind : callKey(kind, str(raw.place, 'place')));
+  const key = raw.place === undefined ? kind : callKey(kind, str(raw.place, 'place'));
   const place = key === kind ? undefined : key.slice(kind.length + 1);
   const times = { since: num(raw.since, 'since', 0), rang: num(raw.rang, 'rang', 0), reminders: int(raw.reminders, 'reminders', 0) };
   return place === undefined ? { kind, ...times } : { kind, place, ...times };
@@ -250,11 +239,11 @@ function readOther(v: unknown): OtherBoat {
   };
 }
 
-function readLog(raw: Raw, rekey: Rekey): Logbook {
+function readLog(raw: Raw): Logbook {
   const times = (v: unknown, what: string): Record<string, number> => {
     const r = record(v, what);
     const out: Record<string, number> = {};
-    for (const [k, t] of Object.entries(r)) out[rekey(readKey(k, what))] = num(t, what);
+    for (const [k, t] of Object.entries(r)) out[readKey(k, what)] = num(t, what);
     return out;
   };
   return { entries: list(raw.entries, 'entries').map(readEntry), waiting: times(raw.waiting, 'waiting'), waited: times(raw.waited, 'waited'), written: bool(raw.written, 'written') };

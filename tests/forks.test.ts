@@ -2,16 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { distanceTo, nearestDistance, poseAt } from '../src/core/track';
 import { hullSpanWithin } from '../src/sim/boat';
 import { callKey } from '../src/sim/calls';
-import { canChooseWay, castOffDay, chooseSpot, chooseWay, dayTimeline, forkAhead, needsYou, newDay, planDay, stepDay } from '../src/sim/day';
+import { castOffDay, chooseSpot, chooseWay, dayTimeline, forkAhead, needsYou, newDay, planDay, stepDay } from '../src/sim/day';
 import type { Day, DayEvent } from '../src/sim/day';
 import { logLines } from '../src/sim/logbook';
 import { loadGame, saveGame } from '../src/sim/save';
 import { callTitle, describeDay, forkWords } from '../src/sim/status';
 import { NO_CONTROLS } from '../src/sim/trip';
 import { planWalkers } from '../src/sim/walkers';
-import { CHAMBER_HALF, LANDING_GAP } from '../src/sim/lock';
-import { BOAT_BEAM, BOAT_LENGTH, CANAL_WIDTH, LOCK_REACH, LOCK_WIDTH, MOORED_OFFSET, TOWPATH_OFFSET } from '../src/world/dimensions';
-import { checkStretch, resolveStretch } from '../src/world/stretch';
+import { CHAMBER_HALF } from '../src/sim/lock';
+import { BOAT_BEAM, BOAT_LENGTH, CANAL_WIDTH, LOCK_REACH, LOCK_STRAIGHT, LOCK_WIDTH, MOORED_OFFSET, TOWPATH_OFFSET } from '../src/world/dimensions';
+import { JUNCTION_ROUND, checkStretch, resolveStretch } from '../src/world/stretch';
 import type { StretchData } from '../src/world/stretch';
 import { towpathRuns } from '../src/world/towpath';
 import { FORKS } from './fixtures/forks';
@@ -163,18 +163,19 @@ describe('a day with more than one choice', () => {
     expect(again.trip.boat.s).toBeCloseTo(day.trip.boat.s, 3);
   });
 
-  it.each([2930, 2960])('keeps a lock %i along, by the junction, on the ways that turn there', (at) => {
-    const near = resolveStretch({ ...FORKS, features: FORKS.features.map((f) => (f.id === 'bottom-lock' ? { ...f, at } : f)) });
-    for (const way of near.ways) expect(way.onRoute.map((f) => f.feature.id), way.id).toContain('bottom-lock');
+  it.each([2750, 2930, 2960])('turns down a lock %i along, too near the junction for the ways that turn there to round the corner clear of it', (at) => {
+    const near = { ...FORKS, features: FORKS.features.map((f) => (f.id === 'bottom-lock' ? { ...f, at } : f)) };
+    expect(checkStretch(near)).toEqual(['north', 'south'].map((way) => `bottom-lock is too near Elm Junction for the way ${way} to round the corner clear of it`));
+    expect(() => resolveStretch(near)).toThrow();
   });
 
   it('waits for a junction past a lock just before it, never back inside it', () => {
-    const data: StretchData = { ...FORKS, features: FORKS.features.map((f) => (f.id === 'bottom-lock' ? { ...f, at: 2750 } : f)) };
+    const data: StretchData = { ...FORKS, features: FORKS.features.map((f) => (f.id === 'bottom-lock' ? { ...f, at: 2680 } : f)) };
     const near = planDay(resolveStretch(data));
     const day = newDay(near, { other: null, crewed: true });
     const lock = day.plan.locks.find((l) => l.id === 'bottom-lock')!;
     const elm = forkAhead(day, near)!;
-    expect(elm.s - lock.s).toBeLessThan(300);
+    expect(elm.s - lock.s).toBeLessThan(LOCK_STRAIGHT + JUNCTION_ROUND + 10);
     expect(elm.hold).toBeGreaterThan(lock.s + CHAMBER_HALF + BOAT_LENGTH / 2);
     castOffDay(day);
     let last = day.trip.boat.s;
@@ -187,33 +188,6 @@ describe('a day with more than one choice', () => {
     expect(cleared).toBe(true);
     expect(day.held).toBe(true);
     expect(day.trip.boat.s).toBeCloseTo(elm.hold, 0);
-  });
-
-  it('waits below a lock that sits right at a junction, and offers the choice there', () => {
-    const data: StretchData = { ...FORKS, features: FORKS.features.map((f) => (f.id === 'bottom-lock' ? { ...f, at: 2930 } : f)) };
-    const near = planDay(resolveStretch(data));
-    const day = newDay(near, { other: null, crewed: true });
-    const lock = day.plan.locks.find((l) => l.id === 'bottom-lock')!;
-    const elm = forkAhead(day, near)!;
-    expect(lock.s + CHAMBER_HALF + BOAT_LENGTH / 2).toBeGreaterThan(elm.s - BOAT_LENGTH / 2);
-    expect(elm.hold).toBeLessThan(lock.s - LANDING_GAP);
-    castOffDay(day);
-    let last = day.trip.boat.s;
-    const events: DayEvent[] = [];
-    const step = () => {
-      events.push(...stepDay(day, near, NO_CONTROLS, STEP));
-      expect(day.trip.boat.s).toBeGreaterThanOrEqual(last - 1e-9);
-      last = day.trip.boat.s;
-    };
-    while (!day.held && day.time < 3600) step();
-    expect(day.held).toBe(true);
-    expect(day.trip.boat.s).toBeCloseTo(elm.hold, 0);
-    expect(events.some((e) => e.kind === 'reached-lock')).toBe(false);
-    expect(canChooseWay(day, near)).toBe(true);
-    expect(chooseWay(day, near, 'east')).toContainEqual({ kind: 'chose-way', way: 'east', junction: 'Elm Junction' });
-    while (day.trip.boat.s < elm.s + 200 && day.time < 3600) step();
-    expect(events.some((e) => e.kind === 'cleared-lock' && e.lock === 'bottom-lock')).toBe(true);
-    expect(day.ways).toEqual(['mill', 'east']);
   });
 
   it('moors on a bank against the towpath, whichever side of its canal that is', () => {
