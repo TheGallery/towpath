@@ -394,7 +394,7 @@ export function lightAt(day: Day): Light {
 }
 
 /** When each call rang, and when the day ended, with the locks worked for you and every call answered at once: for timing the day. */
-export function dayTimeline(plan: DayPlan, way: string, other: OtherWay | null = 'down', step = 0.25): { calls: { call: CallKind; place?: string; at: number }[]; end: number } {
+export function dayTimeline(plan: DayPlan, way: string, other: OtherWay | null = 'down', step = 0.25): { calls: { call: CallKind; place?: string; at: number }[]; end: number; way: string } {
   const day = newDay(plan, { other, crewed: true });
   const calls: { call: CallKind; place?: string; at: number }[] = [];
   while (day.phase !== 'over' && day.time < 4 * 60 * 60) {
@@ -406,5 +406,5 @@ export function dayTimeline(plan: DayPlan, way: string, other: OtherWay | null =
       if (e.call === 'dusk') chooseSpot(day, 0);
     }
   }
-  return { calls, end: day.time };
+  return { calls, end: day.time, way: day.plan.way };
 }

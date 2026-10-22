@@ -131,23 +131,55 @@ export function headingAt(track: Track, s: number): number {
   return track.headings[lo] + (track.headings[hi] - track.headings[lo]) * t;
 }
 
-/** The distance along the track of the sample nearest to a point. */
-export function nearestDistance(track: Track, point: Point): number {
-  let best = 0;
-  let bestDist = Infinity;
-  for (let i = 0; i < track.xs.length; i++) {
-    const d = Math.hypot(track.xs[i] - point[0], track.ys[i] - point[1]);
-    if (d < bestDist) {
-      bestDist = d;
-      best = i;
+/** The widest gap between neighbouring samples of each track, worked out once. */
+const widestGaps = new WeakMap<Track, number>();
+
+function widestGap(track: Track): number {
+  let gap = widestGaps.get(track);
+  if (gap === undefined) {
+    gap = 0;
+    for (let i = 1; i < track.ss.length; i++) gap = Math.max(gap, track.ss[i] - track.ss[i - 1]);
+    widestGaps.set(track, gap);
+  }
+  return gap;
+}
+
+/**
+ * The sample nearest to a point, and how far it is: the first such, as from
+ * looking at every one. A first look at every sixteenth sample finds a near
+ * one, and then no sample k on from another can be nearer than that one's
+ * distance less k of the widest gaps, so the search skips those too far along
+ * the track to be nearer than the best so far.
+ */
+function nearestSample(track: Track, [x, y]: Point): { index: number; distance: number } {
+  const gap = widestGap(track) || 1;
+  const count = track.xs.length;
+  let index = 0;
+  let distance = Infinity;
+  for (let i = 0; i < count; i += 16) {
+    const d = Math.hypot(track.xs[i] - x, track.ys[i] - y);
+    if (d < distance) {
+      distance = d;
+      index = i;
     }
   }
-  return track.ss[best];
+  for (let i = 0; i < count; ) {
+    const d = Math.hypot(track.xs[i] - x, track.ys[i] - y);
+    if (d < distance || (d === distance && i < index)) {
+      distance = d;
+      index = i;
+    }
+    i += Math.max(1, Math.floor((d - distance) / gap));
+  }
+  return { index, distance };
+}
+
+/** The distance along the track of the sample nearest to a point. */
+export function nearestDistance(track: Track, point: Point): number {
+  return track.ss[nearestSample(track, point).index];
 }
 
 /** How far a point is from the track, to within the sample spacing. */
 export function distanceTo(track: Track, point: Point): number {
-  let best = Infinity;
-  for (let i = 0; i < track.xs.length; i++) best = Math.min(best, Math.hypot(track.xs[i] - point[0], track.ys[i] - point[1]));
-  return best;
+  return nearestSample(track, point).distance;
 }

@@ -79,6 +79,13 @@ describe('a day with more than one choice', () => {
     expect(bramble.options.map((o) => forkWords(bramble, o, plan).to)).toEqual(['to Mill Basin, by The Mill pub, about 3 min with no locks', 'to Hob Hill bank, a quiet bank under the hill, about 2 min with no locks']);
   });
 
+  it("doesn't count a lock past where the way moors, as at a mooring below one", () => {
+    const below: StretchData = { ...FORKS, features: FORKS.features.map((f) => (f.kind === 'bank' && f.id === 'ferry-bank' ? { ...f, at: 250, spots: [{ name: 'Below the lock', at: 330 }] } : f)) };
+    const belowPlan = planDay(resolveStretch(below));
+    const elm = forkAhead(newDay(belowPlan), belowPlan)!;
+    expect(forkWords(elm, elm.options[2], belowPlan).to).toBe('to Ferry Meadow, a meadow by the old ferry, about 1 min with no locks');
+  });
+
   it.each([
     { way: 'mill', calls: ['cast-off', 'lock:bottom-lock', 'junction:Elm Junction', 'lock:top-lock', 'junction:Bramble Junction', 'dusk'] },
     { way: 'east', calls: ['cast-off', 'lock:bottom-lock', 'junction:Elm Junction', 'lock:top-lock', 'junction:Bramble Junction', 'dusk'] },
