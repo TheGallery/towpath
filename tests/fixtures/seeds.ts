@@ -1,13 +1,16 @@
 // A run of seeds in a test, each making a canal: every one must end in a
 // playable day, a canal that plays or, for the rare seed with no try that
-// plays, the Hallam Canal. The first 1,000 seeds are tested a quarter at a
-// time, in files of their own, so the quarters run side by side.
+// plays, the Hallam Canal, and every canal made must pass the stretch checks,
+// with each lock on a straight reach and clear of where a way rounds a
+// junction. The first 1,000 seeds are tested a quarter at a time, in files of
+// their own, so the quarters run side by side.
 
 import { describe, expect, it } from 'vitest';
 import { dayProblems, makeCanal } from '../../src/sim/playable';
 import type { MadeCanal } from '../../src/sim/playable';
 import { dayShape } from '../../src/world/generate';
 import { HALLAM } from '../../src/world/hallam';
+import { checkStretch } from '../../src/world/stretch';
 
 /** Long enough to make a few hundred canals on a slow machine. */
 const SEEDS_TIMEOUT = 300_000;
@@ -26,6 +29,7 @@ export function seedsPlay(from: number, to: number): void {
         }
         const shape = dayShape(m.seed);
         expect(m.data.seed).toBe(m.seed);
+        expect(checkStretch(m.data), `seed ${m.seed}`).toEqual([]);
         expect(new Set(m.data.waterways.flatMap((w) => (w.leaves ? [w.leaves.junction] : []))).size, `seed ${m.seed}`).toBe(shape.junctions.length);
         expect(m.data.trip.ways, `seed ${m.seed}`).toHaveLength(1 + shape.junctions.length + shape.junctions.filter(Boolean).length);
         const locks = m.data.features.filter((f) => f.kind === 'lock').length;
