@@ -1,9 +1,10 @@
 // The words and buttons over the game: what's happening, who's steering, the
 // speed, what's next, what the boat is calling you for, the choices it asks
 // you to make, the map key, the bell, and the cards at the start and end of
-// the day.
+// the day, which can start a new canal.
 
 import type { DayPhase } from '../sim/day';
+import { canalNumber } from '../sim/playable';
 import type { Upcoming } from '../sim/status';
 
 export interface HudState {
@@ -34,11 +35,15 @@ export interface Choice {
 
 export interface HudOptions {
   readonly startName: string;
+  /** Which canal it is, in a few words for the start card. */
+  readonly canal: string;
   readonly dayMinutes: number;
   /** How much faster than real time the game runs; 1 normally. */
   readonly rate: number;
   readonly onCastOff: () => void;
   readonly onStartAgain: () => void;
+  /** Starts a new game on the canal with the number typed, or a random one if none is. */
+  readonly onNewCanal: (number: number | null) => void;
   readonly onToggleMap: () => void;
   readonly onCall: () => void;
   readonly onBell: (on: boolean) => void;
@@ -113,6 +118,22 @@ export class Hud {
     this.endText = byId(doc, 'end-text');
 
     const minutes = Math.round(options.dayMinutes);
+    byId(doc, 'start-canal').textContent = options.canal;
+    for (const id of ['start-new-canal', 'end-new-canal']) {
+      const form = byId<HTMLFormElement>(doc, id);
+      const field = form.elements.namedItem('canal') as HTMLInputElement;
+      field.addEventListener('input', () => field.setCustomValidity(''));
+      form.addEventListener('submit', (ev) => {
+        ev.preventDefault();
+        const number = canalNumber(field.value);
+        if (number === null && field.value.trim() !== '') {
+          field.setCustomValidity('A canal number is a whole number from 0 to 4294967295. Leave it empty for any canal.');
+          field.reportValidity();
+          return;
+        }
+        options.onNewCanal(number);
+      });
+    }
     byId(doc, 'start-text').textContent = `Your narrowboat is moored at ${options.startName}. Cast off and it cruises by itself. When it needs you, at the lock, at the junction and at dusk, a soft bell rings and the tab's title says so. If you're busy, it waits, and if you close the tab it keeps your place. A day, from morning to morning, takes about ${minutes} minutes.`;
     this.againButton.textContent = `Start a new day from ${options.startName}`;
 

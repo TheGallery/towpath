@@ -22,11 +22,20 @@ const TIMING_STEP = 0.5;
 /** The biggest seed: the generator only uses a seed's lowest 32 bits, so a bigger one would be another seed's canal. */
 export const MAX_SEED = 2 ** 32 - 1;
 
-/** `?seed=N` asks for the canal made from seed N, a whole number from 0 to MAX_SEED; anything else, or none, is the Hallam Canal. */
-export function readSeed(search: string): number | null {
-  const asked = new URLSearchParams(search).get('seed');
-  const seed = asked === null || asked === '' ? NaN : Number(asked);
+/** A canal's number, as asked for: a whole number from 0 to MAX_SEED, or null for anything else, or nothing. */
+export function canalNumber(asked: string | null): number | null {
+  const seed = asked === null || asked.trim() === '' ? NaN : Number(asked);
   return Number.isInteger(seed) && seed >= 0 && seed <= MAX_SEED ? seed : null;
+}
+
+/** `?seed=N` asks for the canal made from seed N; anything else, or none, asks for none. */
+export function readSeed(search: string): number | null {
+  return canalNumber(new URLSearchParams(search).get('seed'));
+}
+
+/** The number for a new canal, any of them as likely as another, from `random` in [0, 1). */
+export function randomSeed(random: () => number = Math.random): number {
+  return Math.min(Math.floor(random() * (MAX_SEED + 1)), MAX_SEED);
 }
 
 /** The junctions where the ways still open part along a way, in order: where its day should call you to choose. */

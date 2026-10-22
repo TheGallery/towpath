@@ -1,38 +1,61 @@
-// Keeping your place: the whole day written down as plain data, so closing
-// the tab or reloading it carries on where you were. A kept place says which
-// version of the format it is and which stretch it's on. One from an older or
-// newer version or another stretch, or broken in any way, is set aside, and a
-// fresh day starts instead.
+// Keeping your place: the game written down as plain data, so closing the tab
+// or reloading it carries on where you were. A kept place says which version
+// of the format it is, and keeps the canal's number and its whole stretch as
+// well as the day, so a change to how canals are made never moves the map
+// under a kept boat. One from an older or newer version, or broken in any
+// way, is set aside, and a new game starts instead; only a day on the Hallam
+// Canal kept before canals had numbers is read back, to finish it.
 
-import type { StretchData } from '../world/stretch';
+import type { Point } from '../core/track';
+import { HALLAM } from '../world/hallam';
+import { resolveStretch } from '../world/stretch';
+import type { AreaData, BankSpotData, BasinBoatData, BasinSpotData, FeatureData, MooredBoatData, Stretch, StretchData, WaterwayData, WayData } from '../world/stretch';
+import { towpathRuns } from '../world/towpath';
 import { callKey } from './calls';
 import type { Call, CallKind } from './calls';
+import { planDay } from './day';
 import type { Day, DayPhase, DayPlan, Glide, Placed } from './day';
 import type { LogEntry, Logbook } from './logbook';
 import type { Crew, LockState, Part } from './lock';
 import type { OtherBoat, OtherWay } from './otherboat';
+import { MAX_SEED } from './playable';
 import type { Passage, Trip, TripPhase, TripPlan } from './trip';
 
 /** Bump this whenever the shape of a kept place changes, or where its places fall along the ways, so older ones are set aside. */
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
+/** The version before canals had numbers, when every kept place was on the Hallam Canal or made from `?seed=`. A day on the Hallam Canal kept then is read back to finish it. */
+export const HALLAM_SAVE_VERSION = 3;
 
-/** Everything kept between visits: the day, how the next day's lock will be, and whether the bell is on. */
+/** The canal a game is played on: the number it was made from, or null for the Hallam Canal, and its whole stretch. */
+export interface Canal {
+  readonly number: number | null;
+  readonly data: StretchData;
+}
+
+/** Everything kept between visits: the canal, the day, how the next day's lock will be, and whether the bell is on. */
 export interface Kept {
+  readonly canal: Canal;
   readonly day: Day;
   /** Which way the other boat went through the lock today; the next day gets the other. */
   readonly other: OtherWay;
   readonly bell: boolean;
 }
 
+/** A kept place read back, with the stretch and day plan its day was read against, ready to play. */
+export interface Loaded extends Kept {
+  readonly stretch: Stretch;
+  readonly plan: DayPlan;
+}
+
 /** The kept place as text, for browser storage. */
-export function saveGame(kept: Kept, stretch: StretchData): string {
+export function saveGame(kept: Kept): string {
   const { day } = kept;
   const { trip } = day;
   const spot = day.spot ? day.plan.spots.indexOf(day.spot) : -1;
   return JSON.stringify({
     version: SAVE_VERSION,
-    stretch: stretch.id,
-    seed: stretch.seed,
+    canal: kept.canal.number,
+    stretch: kept.canal.data,
     other: kept.other,
     bell: kept.bell,
     day: {
@@ -82,7 +105,7 @@ const num = (v: unknown, what: string, lo = -Infinity, hi = Infinity): number =>
 const int = (v: unknown, what: string, lo = -Infinity, hi = Infinity): number => (Number.isInteger(v) ? num(v, what, lo, hi) : fail(what));
 const bool = (v: unknown, what: string): boolean => (typeof v === 'boolean' ? v : fail(what));
 const str = (v: unknown, what: string): string => (typeof v === 'string' ? v : fail(what));
-const oneOf = <T extends string>(v: unknown, values: readonly T[], what: string): T => (values.includes(v as T) ? (v as T) : fail(what));
+const oneOf = <T extends string | number>(v: unknown, values: readonly T[], what: string): T => (values.includes(v as T) ? (v as T) : fail(what));
 const orNull = <T>(v: unknown, read: (v: unknown) => T): T | null => (v === null ? null : read(v));
 
 const DAY_PHASES: readonly DayPhase[] = ['morning', 'underway', 'dusk', 'tying-up', 'evening', 'night', 'dawn', 'over'];
@@ -100,18 +123,184 @@ const OTHER_WAYS: readonly OtherWay[] = ['down', 'up'];
 const PARTS: readonly Part[] = ['bottomGates', 'topGates', 'bottomPaddle', 'topPaddle'];
 
 /**
- * Reads a kept place back for this stretch and its day plan, or null if
- * there's none, or it's from another version or stretch, or it's broken.
+ * Reads a kept place back, with its canal ready to play, or null if there's
+ * none, or it's from another version, or it's broken.
  */
-export function loadGame(text: string | null, plan: DayPlan, stretch: StretchData): Kept | null {
+export function loadGame(text: string | null): Loaded | null {
   if (!text) return null;
   try {
     const raw = record(JSON.parse(text), 'save');
-    if (raw.version !== SAVE_VERSION || raw.stretch !== stretch.id || raw.seed !== stretch.seed) return null;
-    return { day: readDay(record(raw.day, 'day'), plan), other: oneOf(raw.other, OTHER_WAYS, 'other'), bell: bool(raw.bell, 'bell') };
+    let canal: Canal;
+    if (raw.version === SAVE_VERSION) canal = { number: orNull(raw.canal, (v) => int(v, 'canal', 0, MAX_SEED)), data: readStretch(raw.stretch) };
+    // A day on the Hallam Canal from before canals had numbers, kept in the same shape, finishes there.
+    else if (raw.version === HALLAM_SAVE_VERSION && raw.stretch === HALLAM.id && raw.seed === HALLAM.seed) canal = { number: null, data: HALLAM };
+    else return null;
+    const { stretch, plan } = playable(canal.data);
+    return { canal, stretch, plan, day: readDay(record(raw.day, 'day'), plan), other: oneOf(raw.other, OTHER_WAYS, 'other'), bell: bool(raw.bell, 'bell') };
   } catch (e) {
     if (e instanceof BadSave || e instanceof SyntaxError || e instanceof TypeError || e instanceof RangeError) return null;
     throw e;
+  }
+}
+
+/** A kept stretch made ready to play, as the game makes it before it starts: one that won't is set aside. */
+function playable(data: StretchData): { stretch: Stretch; plan: DayPlan } {
+  try {
+    const stretch = resolveStretch(data);
+    towpathRuns(stretch);
+    return { stretch, plan: planDay(stretch) };
+  } catch (e) {
+    // Its curves, ways and towpaths throw plain errors when a kept stretch doesn't fit together.
+    if (e instanceof Error) fail(`stretch: ${e.message}`);
+    throw e;
+  }
+}
+
+/** The most points a canal or road may have, and things of any one kind a stretch may hold, so a broken one can't take forever to lay out. */
+const MAX_POINTS = 400;
+const MAX_THINGS = 200;
+/** How big a stretch may be, and how far beyond its edges a canal or road may run. */
+const MAX_SIZE = 20000;
+const BEYOND = 4000;
+/** The furthest anything may be placed along a canal or road. */
+const MAX_ALONG = 100000;
+const SIDES: readonly (1 | -1)[] = [1, -1];
+
+const things = <T>(v: unknown, what: string, read: (v: unknown) => T): T[] => {
+  const items = list(v, what);
+  return items.length <= MAX_THINGS ? items.map(read) : fail(what);
+};
+
+/** The whole stretch a kept place is on, every value checked, as the generator or the hand-made stretch wrote it. */
+function readStretch(v: unknown): StretchData {
+  const raw = record(v, 'stretch');
+  const sizeRaw = record(raw.size, 'size');
+  const size = { width: num(sizeRaw.width, 'width', 1, MAX_SIZE), height: num(sizeRaw.height, 'height', 1, MAX_SIZE) };
+  const point = (p: unknown, what: string): Point => {
+    const xy = list(p, what);
+    if (xy.length !== 2) fail(what);
+    return [num(xy[0], what, -BEYOND, size.width + BEYOND), num(xy[1], what, -BEYOND, size.height + BEYOND)];
+  };
+  const points = (p: unknown, what: string): Point[] => {
+    const all = list(p, what);
+    return all.length <= MAX_POINTS ? all.map((q) => point(q, what)) : fail(what);
+  };
+  const along = (p: unknown, what: string) => num(p, what, 0, MAX_ALONG);
+  const area = (a: unknown): AreaData => {
+    const ar = record(a, 'area');
+    const radius = point(ar.radius, 'radius');
+    if (radius[0] < 0 || radius[1] < 0) fail('radius');
+    return { name: str(ar.name, 'area name'), centre: point(ar.centre, 'centre'), radius };
+  };
+  const tripRaw = record(raw.trip, 'trip');
+  const fromRaw = record(tripRaw.from, 'from');
+  return {
+    id: str(raw.id, 'id'),
+    name: str(raw.name, 'name'),
+    seed: int(raw.seed, 'seed', 0, MAX_SEED),
+    size,
+    waterways: things(raw.waterways, 'waterways', (w): WaterwayData => {
+      const wr = record(w, 'waterway');
+      const leaves = wr.leaves === undefined ? undefined : record(wr.leaves, 'leaves');
+      const label = wr.label === undefined ? undefined : record(wr.label, 'label');
+      return {
+        id: str(wr.id, 'waterway id'),
+        name: str(wr.name, 'waterway name'),
+        points: points(wr.points, 'waterway points'),
+        ...(leaves && { leaves: { waterway: str(leaves.waterway, 'leaves'), atPoint: int(leaves.atPoint, 'at point', 0, MAX_POINTS), junction: str(leaves.junction, 'junction') } }),
+        ...(label && { label: { at: along(label.at, 'label at'), side: oneOf(label.side, SIDES, 'label side') } }),
+      };
+    }),
+    roads: things(raw.roads, 'roads', (r) => {
+      const rr = record(r, 'road');
+      return { id: str(rr.id, 'road id'), name: str(rr.name, 'road name'), points: points(rr.points, 'road points') };
+    }),
+    features: things(raw.features, 'features', (f) => readFeature(record(f, 'feature'), point, along)),
+    woods: things(raw.woods, 'woods', area),
+    ponds: things(raw.ponds, 'ponds', area),
+    villages: things(raw.villages, 'villages', (x) => {
+      const vr = record(x, 'village');
+      return { name: str(vr.name, 'village name'), road: str(vr.road, 'village road'), from: along(vr.from, 'village from'), houses: int(vr.houses, 'houses', 0, MAX_THINGS), label: point(vr.label, 'village label') };
+    }),
+    farms: things(raw.farms, 'farms', (x) => {
+      const fr = record(x, 'farm');
+      return { road: str(fr.road, 'farm road'), at: along(fr.at, 'farm at'), side: oneOf(fr.side, SIDES, 'farm side') };
+    }),
+    pubs: things(raw.pubs, 'pubs', (x) => {
+      const pr = record(x, 'pub');
+      return { name: str(pr.name, 'pub name'), at: point(pr.at, 'pub at') };
+    }),
+    mapNotes: things(raw.mapNotes, 'map notes', (x) => {
+      const nr = record(x, 'map note');
+      return { text: str(nr.text, 'map note'), at: point(nr.at, 'map note at') };
+    }),
+    trip: {
+      from: { name: str(fromRaw.name, 'from'), waterway: str(fromRaw.waterway, 'from waterway'), at: along(fromRaw.at, 'from at') },
+      ways: things(tripRaw.ways, 'trip ways', (w): WayData => {
+        const wr = record(w, 'trip way');
+        return { id: str(wr.id, 'trip way id'), route: things(wr.route, 'route', (id) => str(id, 'route')), to: str(wr.to, 'to') };
+      }),
+    },
+  };
+}
+
+function readFeature(raw: Raw, point: (v: unknown, what: string) => Point, along: (v: unknown, what: string) => number): FeatureData {
+  const base = {
+    id: str(raw.id, 'feature id'),
+    name: str(raw.name, 'feature name'),
+    waterway: str(raw.waterway, 'feature waterway'),
+    at: along(raw.at, 'feature at'),
+    ...(raw.labelSide !== undefined && { labelSide: oneOf(raw.labelSide, SIDES, 'label side') }),
+  };
+  const livery = (v: unknown) => int(v, 'livery', 0, MAX_THINGS);
+  const angle = (v: unknown) => num(v, 'angle', -2 * Math.PI, 2 * Math.PI);
+  switch (raw.kind) {
+    case 'bridge':
+      return { kind: 'bridge', ...base, road: str(raw.road, 'bridge road') };
+    case 'footbridge':
+      return { kind: 'footbridge', ...base };
+    case 'lock':
+      return { kind: 'lock', ...base, uphill: oneOf(raw.uphill, SIDES, 'uphill') };
+    case 'moorings':
+      return {
+        kind: 'moorings',
+        ...base,
+        boats: things(raw.boats, 'boats', (b): MooredBoatData => {
+          const br = record(b, 'boat');
+          return { at: along(br.at, 'boat at'), facing: oneOf(br.facing, SIDES, 'facing'), livery: livery(br.livery) };
+        }),
+      };
+    case 'basin': {
+      const ar = record(raw.area, 'basin area');
+      const corner = point([ar.x, ar.y], 'basin area');
+      const far = point([num(ar.x, 'basin area') + num(ar.width, 'basin width', 0), num(ar.y, 'basin area') + num(ar.height, 'basin height', 0)], 'basin area');
+      return {
+        kind: 'basin',
+        ...base,
+        area: { x: corner[0], y: corner[1], width: far[0] - corner[0], height: far[1] - corner[1] },
+        boats: things(raw.boats, 'boats', (b): BasinBoatData => {
+          const br = record(b, 'boat');
+          return { at: point(br.at, 'boat at'), angle: angle(br.angle), livery: livery(br.livery) };
+        }),
+        about: str(raw.about, 'about'),
+        spots: things(raw.spots, 'spots', (p): BasinSpotData => {
+          const pr = record(p, 'spot');
+          return { name: str(pr.name, 'spot name'), at: point(pr.at, 'spot at'), angle: angle(pr.angle) };
+        }),
+      };
+    }
+    case 'bank':
+      return {
+        kind: 'bank',
+        ...base,
+        about: str(raw.about, 'about'),
+        spots: things(raw.spots, 'spots', (p): BankSpotData => {
+          const pr = record(p, 'spot');
+          return { name: str(pr.name, 'spot name'), at: along(pr.at, 'spot at') };
+        }),
+      };
+    default:
+      return fail('feature kind');
   }
 }
 
