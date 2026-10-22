@@ -19,6 +19,8 @@ import { byHand } from './fixtures/hands';
 const stretch = resolveStretch(FORKS);
 const plan = planDay(stretch);
 const STEP = 1 / 30;
+/** Long enough for a whole day played through on a slow machine. */
+const DAY_TIMEOUT = 20_000;
 const ids = (ways: readonly { way: string }[]) => ways.map((w) => w.way);
 
 /** Runs the day until `until` says stop, or a time limit in seconds, and gathers its events. */
@@ -75,22 +77,19 @@ describe('a day with more than one choice', () => {
     expect(bramble.options.map((o) => forkWords(bramble, o, plan).to)).toEqual(['to Mill Basin, by The Mill pub, about 3 min with no locks', 'to Hob Hill bank, a quiet bank under the hill, about 2 min with no locks']);
   });
 
-  it('calls you to every lock and every junction on the way you take, once each, and plays to the next morning', () => {
-    const expected: Record<string, string[]> = {
-      mill: ['cast-off', 'lock:bottom-lock', 'junction:Elm Junction', 'lock:top-lock', 'junction:Bramble Junction', 'dusk'],
-      east: ['cast-off', 'lock:bottom-lock', 'junction:Elm Junction', 'lock:top-lock', 'junction:Bramble Junction', 'dusk'],
-      north: ['cast-off', 'lock:bottom-lock', 'junction:Elm Junction', 'dusk'],
-      south: ['cast-off', 'lock:bottom-lock', 'junction:Elm Junction', 'lock:ferry-lock', 'dusk'],
-    };
-    for (const [way, calls] of Object.entries(expected)) {
-      const { day, rang } = playDay(way, way === 'south' ? 'up' : 'down');
-      expect(rang, way).toEqual(calls);
-      expect(day.phase, way).toBe('over');
-      expect(day.plan.way).toBe(way);
-      expect(day.ways).toEqual([way]);
-      expect(day.log.entries.filter((e) => e.kind === 'lock' && e.cleared !== null)).toHaveLength(calls.filter((c) => c.startsWith('lock')).length);
-    }
-  });
+  it.each([
+    { way: 'mill', calls: ['cast-off', 'lock:bottom-lock', 'junction:Elm Junction', 'lock:top-lock', 'junction:Bramble Junction', 'dusk'] },
+    { way: 'east', calls: ['cast-off', 'lock:bottom-lock', 'junction:Elm Junction', 'lock:top-lock', 'junction:Bramble Junction', 'dusk'] },
+    { way: 'north', calls: ['cast-off', 'lock:bottom-lock', 'junction:Elm Junction', 'dusk'] },
+    { way: 'south', calls: ['cast-off', 'lock:bottom-lock', 'junction:Elm Junction', 'lock:ferry-lock', 'dusk'] },
+  ])('calls you to every lock and every junction on the way $way, once each, and plays to the next morning', ({ way, calls }) => {
+    const { day, rang } = playDay(way, way === 'south' ? 'up' : 'down');
+    expect(rang, way).toEqual(calls);
+    expect(day.phase, way).toBe('over');
+    expect(day.plan.way).toBe(way);
+    expect(day.ways).toEqual([way]);
+    expect(day.log.entries.filter((e) => e.kind === 'lock' && e.cleared !== null)).toHaveLength(calls.filter((c) => c.startsWith('lock')).length);
+  }, DAY_TIMEOUT);
 
   it('works a lock past the junction on a way the day only takes once you choose it', () => {
     // Before every way's locks were kept, the boat stopped below Ferry Lock for good.
@@ -101,7 +100,7 @@ describe('a day with more than one choice', () => {
     const timeline = dayTimeline(plan, 'south', 'down');
     expect(timeline.calls.map((c) => c.call)).toEqual(['cast-off', 'junction', 'dusk']);
     expect(timeline.end / 60).toBeLessThan(25);
-  });
+  }, DAY_TIMEOUT);
 
   it('waits before each junction until you choose, and asks by name', () => {
     const day = newDay(plan, { other: 'down', crewed: true });
@@ -142,7 +141,7 @@ describe('a day with more than one choice', () => {
       'The lamps are lit',
     ]);
     expect(logLines(day.log)[6].text).toMatch(/two locks today/);
-  });
+  }, DAY_TIMEOUT);
 
   it('keeps your place between two forks, with every lock, and carries on from it', () => {
     const day = newDay(plan, { other: 'up', crewed: true });

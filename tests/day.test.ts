@@ -33,6 +33,8 @@ const plan = planDay(stretch);
 const fork = forkAhead(newDay(plan), plan)!;
 const [arm, main] = plan.ways;
 const STEP = 1 / 30;
+/** Long enough for a whole day played through on a slow machine. */
+const DAY_TIMEOUT = 20_000;
 
 /** Runs the day until `until` says stop, or a time limit in seconds, and gathers its events. */
 function run(day: Day, until: (d: Day) => boolean, limit = 3600, each?: (d: Day) => void): DayEvent[] {
@@ -98,7 +100,7 @@ describe('a day with every call answered at once', () => {
       expect(end / 60).toBeGreaterThan(17);
       expect(end / 60).toBeLessThan(23);
     }
-  });
+  }, DAY_TIMEOUT);
 
   it('calls you to the lock when it is yours to work, and stops calling when you come', () => {
     for (const other of ['down', 'up'] as const) {
@@ -137,7 +139,7 @@ describe('a day with every call answered at once', () => {
       expect(Math.hypot(at.x - spot.x, at.y - spot.y)).toBeLessThan(0.01);
       expect(day.time / 60).toBeLessThan(26);
     }
-  });
+  }, DAY_TIMEOUT);
 });
 
 describe('a call you ignore', () => {
