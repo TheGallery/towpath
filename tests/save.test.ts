@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { answerLock, castOffDay, chooseSpot, chooseWay, lightAt, needsYou, newDay, planDay, stepDay } from '../src/sim/day';
 import type { Day, DayPlan } from '../src/sim/day';
 import { logLines } from '../src/sim/logbook';
+import type { DayPage } from '../src/sim/logbook';
 import { windPaddle } from '../src/sim/lock';
 import { makeCanal } from '../src/sim/playable';
-import { HALLAM_SAVE_VERSION, SAVE_VERSION, loadGame, saveGame } from '../src/sim/save';
+import { HALLAM_SAVE_VERSION, MAX_PAGES, NUMBERS_SAVE_VERSION, SAVE_VERSION, dayPage, loadGame, saveGame } from '../src/sim/save';
 import type { Canal, Kept } from '../src/sim/save';
 import { describeDay } from '../src/sim/status';
 import { NO_CONTROLS, lockForYou } from '../src/sim/trip';
@@ -45,7 +46,7 @@ function finish(day: Day, on: DayPlan): void {
 }
 
 const HALLAM_CANAL: Canal = { number: null, data: HALLAM };
-const keep = (day: Day): Kept => ({ canal: HALLAM_CANAL, day, other: 'up', bell: false });
+const keep = (day: Day): Kept => ({ canal: HALLAM_CANAL, day, pages: [], other: 'up', bell: false });
 const roundTrip = (day: Day) => loadGame(saveGame(keep(day)));
 
 /** A kept place as the game wrote it before canals had numbers, when the Hallam Canal's was kept with only its id and seed. */
@@ -148,7 +149,7 @@ describe('keeping your place on a canal made from its number', () => {
   const madePlan = planDay(resolveStretch(made));
   const day = newDay(madePlan, { other: 'down', number: 3, crewed: true });
   run(day, (d) => d.phase === 'night', NO_CONTROLS, true, 4 * 3600, madePlan);
-  const text = saveGame({ canal, day, other: 'down', bell: true });
+  const text = saveGame({ canal, day, pages: [], other: 'down', bell: true });
 
   it('keeps the canal number, the whole stretch and the day, and reads them back', () => {
     const kept = loadGame(text)!;
@@ -181,6 +182,60 @@ describe('keeping your place on a canal made from its number', () => {
     run(loaded.day, (d) => d.phase === 'over', NO_CONTROLS, true, 4 * 3600, loaded.plan);
     expect(loaded.day.phase).toBe('over');
     expect(loaded.day).toEqual(day);
+  });
+});
+
+describe('the pages of the earlier days in the logbook', () => {
+  const over = MOMENTS[MOMENTS.length - 1][1];
+  const pages: DayPage[] = [1, 2, 3].map((number) => ({ ...dayPage(HALLAM_CANAL, { ...over, number }), name: `The Hallam Canal at Wendle, day ${number}`, seed: HALLAM.seed + number }));
+  const kept: Kept = { ...keep(newDay(plan, { other: 'down', number: 4 })), pages };
+
+  it('are kept, each only its page and seed line, without its map, and read back', () => {
+    expect(over.log.written).toBe(true);
+    const text = saveGame(kept);
+    const loaded = loadGame(text)!;
+    expect(loaded.pages).toEqual(pages);
+    for (const page of loaded.pages) expect(logLines(page.log)).toEqual(logLines(over.log));
+    expect(loaded.day).toEqual(kept.day);
+    for (const page of JSON.parse(text).pages) expect(Object.keys(page).sort()).toEqual(['entries', 'name', 'number', 'seed', 'waited']);
+    expect(text.length - saveGame(keep(kept.day)).length).toBeLessThan(pages.length * 1500);
+  });
+
+  it('keep the latest year of days', () => {
+    const many = Array.from({ length: MAX_PAGES + 20 }, (_, i) => ({ ...pages[0], number: i + 1 }));
+    const loaded = loadGame(saveGame({ ...kept, pages: many }))!;
+    expect(loaded.pages).toHaveLength(MAX_PAGES);
+    expect(loaded.pages[0].number).toBe(21);
+  });
+
+  it('are none on a day kept before each day had its page, which reads back otherwise just as it was', () => {
+    const old = JSON.parse(saveGame(kept));
+    delete old.pages;
+    const loaded = loadGame(JSON.stringify({ ...old, version: NUMBERS_SAVE_VERSION }))!;
+    expect(loaded.pages).toEqual([]);
+    expect(loaded.canal).toEqual(HALLAM_CANAL);
+    expect(loaded.day).toEqual(kept.day);
+  });
+
+  it('set the kept place aside when one is missing or makes no sense', () => {
+    const good = JSON.parse(saveGame(kept));
+    const edits: ((s: typeof good) => void)[] = [
+      (s) => delete s.pages,
+      (s) => (s.pages = {}),
+      (s) => (s.pages = Array.from({ length: MAX_PAGES + 1 }, () => s.pages[0])),
+      (s) => (s.pages[0] = null),
+      (s) => (s.pages[0].number = 0),
+      (s) => (s.pages[1].seed = -1),
+      (s) => (s.pages[1].seed = 2 ** 32),
+      (s) => delete s.pages[2].name,
+      (s) => (s.pages[0].entries = [{ kind: 'picnic', at: 3 }]),
+      (s) => (s.pages[0].waited = { 'tea:brook-lock': 5 }),
+    ];
+    for (const edit of edits) {
+      const s = structuredClone(good);
+      edit(s);
+      expect(loadGame(JSON.stringify(s)), edit.toString()).toBeNull();
+    }
   });
 });
 

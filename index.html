@@ -84,7 +84,7 @@
             <li><span><kbd>Space</kbd></span> Answer the boat's call: work the lock, choose a way, or choose where to moor.</li>
             <li><span><kbd>1</kbd><kbd>2</kbd></span> Pick an answer when the boat asks you to choose.</li>
             <li><span><kbd>M</kbd></span> Open the map, and press it again to come back.</li>
-            <li><span><kbd>L</kbd></span> Read the logbook, once the day is written up in the evening.</li>
+            <li><span><kbd>L</kbd></span> Read the logbook: each day is written up in the evening.</li>
           </ul>
           <button type="button" class="primary" id="cast-off">Cast off</button>
           <form class="new-canal" id="start-new-canal">
@@ -116,6 +116,10 @@
             <p class="logbook-day" id="logbook-day"></p>
           </div>
           <ol class="logbook-lines" id="logbook-lines"></ol>
+          <div class="logbook-turn">
+            <button type="button" class="logbook-turn-button" id="logbook-earlier" hidden>‹ The day before</button>
+            <button type="button" class="logbook-turn-button" id="logbook-later" hidden>The day after ›</button>
+          </div>
           <div class="logbook-foot">
             <p class="logbook-seed" id="logbook-seed"></p>
             <button type="button" class="logbook-close" id="logbook-close">Close <kbd>Esc</kbd></button>

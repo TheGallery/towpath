@@ -2,7 +2,7 @@
 // junction and where you moored, noted as it happens and written up in the
 // evening, when it's there to read. It keeps names, times and facts rather
 // than finished sentences, so a kept place still reads well if the words
-// change.
+// change. Each earlier day keeps its page, but not its map.
 
 import { METRES_PER_UNIT } from '../world/dimensions';
 import { callKey } from './calls';
@@ -42,6 +42,17 @@ export interface Logbook {
 
 export function newLogbook(): Logbook {
   return { entries: [], waiting: {}, waited: {}, written: false };
+}
+
+/** What's noted on a page once the day is done: the entries, and how long the boat waited for you. */
+export type LogPage = Pick<Logbook, 'entries' | 'waited'>;
+
+/** An earlier day's page of the logbook: which day it was, the stretch it was on by name and seed, and what was noted. */
+export interface DayPage {
+  readonly number: number;
+  readonly name: string;
+  readonly seed: number;
+  readonly log: LogPage;
 }
 
 const METRES_PER_MILE = 1609.344;
@@ -125,12 +136,12 @@ const NUMBERS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
 const count = (n: number, thing: string): string => `${NUMBERS[n] ?? n} ${thing}${n === 1 ? '' : 's'}`;
 
 /** How long the boat waited for you on a call, by its key, when it's long enough to mention. */
-function waitedFor(log: Logbook, call: string, what: string): string {
+function waitedFor(log: LogPage, call: string, what: string): string {
   const seconds = log.waited[call] ?? 0;
   return seconds >= 60 ? ` The boat waited ${minutes(seconds)} for you ${what}.` : '';
 }
 
-function lockWords(entry: Extract<LogEntry, { kind: 'lock' }>, log: Logbook): string {
+function lockWords(entry: Extract<LogEntry, { kind: 'lock' }>, log: LogPage): string {
   const dir = entry.goingUp ? 'Up' : 'Down';
   const name = entry.lock;
   const worked = entry.yours !== null && entry.cleared !== null ? minutes(entry.cleared - entry.yours) : null;
@@ -144,7 +155,7 @@ function lockWords(entry: Extract<LogEntry, { kind: 'lock' }>, log: Logbook): st
   return text + waitedFor(log, callKey('lock', entry.id), 'at the lock');
 }
 
-function wayWords(entry: Extract<LogEntry, { kind: 'way' }>, log: Logbook): string {
+function wayWords(entry: Extract<LogEntry, { kind: 'way' }>, log: LogPage): string {
   const to = entry.to ? ` for ${entry.to}` : '';
   const text = entry.turn === 'straight' ? `Straight on at ${entry.junction}, along the ${entry.onto}${to}.` : `Turned ${entry.turn} at ${entry.junction} into the ${entry.onto}${to ? `,${to}` : ''}.`;
   return text + waitedFor(log, callKey('junction', entry.junction), 'to choose');
@@ -154,7 +165,7 @@ function wayWords(entry: Extract<LogEntry, { kind: 'way' }>, log: Logbook): stri
  * The logbook as lines to read. Times are minutes after casting off, with the
  * morning and the evening named.
  */
-export function logLines(log: Logbook): LogLine[] {
+export function logLines(log: LogPage): LogLine[] {
   const setOut = log.entries.find((e) => e.kind === 'set-out');
   const after = (at: number) => (setOut ? minutes(at - setOut.at) : '');
   return log.entries.map((e): LogLine => {

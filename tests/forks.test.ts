@@ -158,7 +158,7 @@ describe('a day with more than one choice', () => {
     run(day, (d) => d.held);
     chooseWay(day, plan, 'mill');
     run(day, (d) => d.trip.boat.s > (d.plan.locks[1]?.s ?? 0) + 400);
-    const text = saveGame({ canal: { number: null, data: FORKS }, day, other: 'up', bell: true });
+    const text = saveGame({ canal: { number: null, data: FORKS }, day, pages: [], other: 'up', bell: true });
     expect(Object.keys(JSON.parse(text).day.trip.locks)).toEqual(['bottom-lock', 'top-lock', 'ferry-lock']);
     const kept = loadGame(text)!.day;
     expect(kept).toEqual(day);

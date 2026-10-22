@@ -1,41 +1,48 @@
 // Keeping your place: the game written down as plain data, so closing the tab
 // or reloading it carries on where you were. A kept place says which version
-// of the format it is, and keeps the canal's number and its whole stretch as
-// well as the day, so a change to how canals are made never moves the map
-// under a kept boat. One from an older or newer version, or broken in any
-// way, is set aside, and a new game starts instead; only a day on the Hallam
-// Canal kept before canals had numbers is read back, to finish it.
+// of the format it is, and keeps the canal's number and today's whole stretch
+// as well as the day, so a change to how canals are made never moves the map
+// under a kept boat, and each earlier day's page of the logbook, without its
+// map. One from an older or newer version, or broken in any way, is set aside,
+// and a new game starts instead; only a day kept before each day had its page
+// is read back, with no earlier pages, and a day on the Hallam Canal kept
+// before canals had numbers, to finish it.
 
 import type { Point } from '../core/track';
+import { mooredAt } from '../world/generate';
 import { HALLAM } from '../world/hallam';
 import { resolveStretch } from '../world/stretch';
 import type { AreaData, BankSpotData, BasinBoatData, BasinSpotData, FeatureData, MooredBoatData, Stretch, StretchData, WaterwayData, WayData } from '../world/stretch';
 import { towpathRuns } from '../world/towpath';
 import { callKey } from './calls';
 import type { Call, CallKind } from './calls';
-import { planDay } from './day';
+import { newDay, planDay } from './day';
 import type { Day, DayPhase, DayPlan, Glide, Placed } from './day';
-import type { LogEntry, Logbook } from './logbook';
+import type { DayPage, LogEntry, LogPage, Logbook } from './logbook';
 import type { Crew, LockState, Part } from './lock';
 import type { OtherBoat, OtherWay } from './otherboat';
-import { MAX_SEED } from './playable';
+import { MAX_SEED, makeDay } from './playable';
 import type { Passage, Trip, TripPhase, TripPlan } from './trip';
 
 /** Bump this whenever the shape of a kept place changes, or where its places fall along the ways, so older ones are set aside. */
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
+/** The version before each day kept its page in the logbook. A day kept then is read back with no earlier pages. */
+export const NUMBERS_SAVE_VERSION = 4;
 /** The version before canals had numbers, when every kept place was on the Hallam Canal or made from `?seed=`. A day on the Hallam Canal kept then is read back to finish it. */
 export const HALLAM_SAVE_VERSION = 3;
 
-/** The canal a game is played on: the number it was made from, or null for the Hallam Canal, and its whole stretch. */
+/** The canal a game is played on: the number it was made from, or null for the Hallam Canal, and today's whole stretch of it. */
 export interface Canal {
   readonly number: number | null;
   readonly data: StretchData;
 }
 
-/** Everything kept between visits: the canal, the day, how the next day's lock will be, and whether the bell is on. */
+/** Everything kept between visits: the canal, the day, the earlier days' pages, how the next day's lock will be, and whether the bell is on. */
 export interface Kept {
   readonly canal: Canal;
   readonly day: Day;
+  /** Each earlier day's page of the logbook, oldest first: only the page and its seed line, not the day's map. */
+  readonly pages: readonly DayPage[];
   /** Which way the other boat went through the lock today; the next day gets the other. */
   readonly other: OtherWay;
   readonly bell: boolean;
@@ -46,6 +53,33 @@ export interface Loaded extends Kept {
   readonly stretch: Stretch;
   readonly plan: DayPlan;
 }
+
+/** A day's page of the logbook, to keep once the day is done: its number, and its stretch's name and seed. */
+export function dayPage(canal: Canal, day: Day): DayPage {
+  return { number: day.number, name: canal.data.name, seed: canal.data.seed, log: { entries: day.log.entries, waited: day.log.waited } };
+}
+
+/**
+ * The next morning, to keep: a new stretch of the canal carrying on from where
+ * the boat moored, made from the canal's seed, the next day's number and that
+ * place, with today's page kept in the logbook. The Hallam Canal has no number,
+ * so its seed stands in.
+ */
+export function nextMorning(kept: Kept, stretch: Stretch, other: OtherWay): Kept {
+  const { canal, day } = kept;
+  const number = day.number + 1;
+  const made = makeDay(canal.number ?? HALLAM.seed, number, mooredAt(stretch, day.plan.way));
+  return {
+    canal: { number: canal.number, data: made.data },
+    day: newDay(planDay(resolveStretch(made.data)), { other, number }),
+    pages: [...kept.pages, dayPage(canal, day)],
+    other,
+    bell: kept.bell,
+  };
+}
+
+/** The most earlier pages kept, the latest of them: a year of days, so the kept place stays small. */
+export const MAX_PAGES = 365;
 
 /** The kept place as text, for browser storage. */
 export function saveGame(kept: Kept): string {
@@ -58,6 +92,7 @@ export function saveGame(kept: Kept): string {
     stretch: kept.canal.data,
     other: kept.other,
     bell: kept.bell,
+    pages: kept.pages.slice(-MAX_PAGES).map((p) => ({ number: p.number, name: p.name, seed: p.seed, entries: p.log.entries, waited: p.log.waited })),
     day: {
       number: day.number,
       time: day.time,
@@ -131,12 +166,17 @@ export function loadGame(text: string | null): Loaded | null {
   try {
     const raw = record(JSON.parse(text), 'save');
     let canal: Canal;
-    if (raw.version === SAVE_VERSION) canal = { number: orNull(raw.canal, (v) => int(v, 'canal', 0, MAX_SEED)), data: readStretch(raw.stretch) };
+    let pages: DayPage[] = [];
+    if (raw.version === SAVE_VERSION || raw.version === NUMBERS_SAVE_VERSION) {
+      canal = { number: orNull(raw.canal, (v) => int(v, 'canal', 0, MAX_SEED)), data: readStretch(raw.stretch) };
+      // A day from before each day kept its page, kept in the same shape otherwise, has no earlier pages.
+      if (raw.version === SAVE_VERSION) pages = readPages(raw.pages);
+    }
     // A day on the Hallam Canal from before canals had numbers, kept in the same shape, finishes there.
     else if (raw.version === HALLAM_SAVE_VERSION && raw.stretch === HALLAM.id && raw.seed === HALLAM.seed) canal = { number: null, data: HALLAM };
     else return null;
     const { stretch, plan } = playable(canal.data);
-    return { canal, stretch, plan, day: readDay(record(raw.day, 'day'), plan), other: oneOf(raw.other, OTHER_WAYS, 'other'), bell: bool(raw.bell, 'bell') };
+    return { canal, stretch, plan, day: readDay(record(raw.day, 'day'), plan), pages, other: oneOf(raw.other, OTHER_WAYS, 'other'), bell: bool(raw.bell, 'bell') };
   } catch (e) {
     if (e instanceof BadSave || e instanceof SyntaxError || e instanceof TypeError || e instanceof RangeError) return null;
     throw e;
@@ -428,14 +468,29 @@ function readOther(v: unknown): OtherBoat {
   };
 }
 
+/** How long, or since when, the boat waited on each call, by the call's key. */
+function readTimes(v: unknown, what: string): Record<string, number> {
+  const r = record(v, what);
+  const out: Record<string, number> = {};
+  for (const [k, t] of Object.entries(r)) out[readKey(k, what)] = num(t, what);
+  return out;
+}
+
 function readLog(raw: Raw): Logbook {
-  const times = (v: unknown, what: string): Record<string, number> => {
-    const r = record(v, what);
-    const out: Record<string, number> = {};
-    for (const [k, t] of Object.entries(r)) out[readKey(k, what)] = num(t, what);
-    return out;
-  };
-  return { entries: list(raw.entries, 'entries').map(readEntry), waiting: times(raw.waiting, 'waiting'), waited: times(raw.waited, 'waited'), written: bool(raw.written, 'written') };
+  return { ...readPage(raw), waiting: readTimes(raw.waiting, 'waiting'), written: bool(raw.written, 'written') };
+}
+
+function readPage(raw: Raw): LogPage {
+  return { entries: list(raw.entries, 'entries').map(readEntry), waited: readTimes(raw.waited, 'waited') };
+}
+
+function readPages(v: unknown): DayPage[] {
+  const pages = list(v, 'pages');
+  if (pages.length > MAX_PAGES) fail('pages');
+  return pages.map((p) => {
+    const raw = record(p, 'page');
+    return { number: int(raw.number, 'page number', 1), name: str(raw.name, 'page name'), seed: int(raw.seed, 'page seed', 0, MAX_SEED), log: readPage(raw) };
+  });
 }
 
 function readEntry(v: unknown): LogEntry {
