@@ -7,10 +7,12 @@
 
 import { clamp, lerp, smoothstep } from '../core/math';
 import { poseAt } from '../core/track';
+import { BOAT_LENGTH } from '../world/dimensions';
 import type { Spot, Stretch } from '../world/stretch';
 import { CRUISE_SPEED } from './boat';
 import { answer, newCallBook, remind, ring } from './calls';
 import type { CallBook, CallKind } from './calls';
+import { CHAMBER_HALF, LANDING_GAP } from './lock';
 import { newLogbook, noteEvents } from './logbook';
 import type { Logbook } from './logbook';
 import type { OtherWay } from './otherboat';
@@ -27,6 +29,8 @@ export const DAWN_TIME = 30;
 export const HOLD_GAP = 230;
 /** How far before it waits the junction call rings, about 75 seconds at cruising speed. */
 export const CALL_AHEAD = 490;
+/** How far past a lock's gates the boat must be before it can wait for a junction. */
+const LOCK_CLEARANCE = 30;
 /** How far from the mooring the light begins to go. */
 export const DUSK_FROM = 1100;
 
@@ -66,9 +70,18 @@ export function forkAhead(day: Pick<Day, 'ways' | 'plan'>, plan: DayPlan): Fork 
       const onto = w.junctions.find((k) => k.name === j.name)?.onto ?? '';
       options.set(onto, [...(options.get(onto) ?? []), w]);
     }
-    if (options.size > 1) return { name: j.name, s: j.s, hold: j.s - HOLD_GAP, ring: j.s - HOLD_GAP - CALL_AHEAD, options: [...options.values()] };
+    if (options.size > 1) return { name: j.name, s: j.s, hold: holdClearOfLocks(day.plan, j.s - HOLD_GAP), ring: j.s - HOLD_GAP - CALL_AHEAD, options: [...options.values()] };
   }
   return null;
+}
+
+/** Where the boat waits for a junction: never inside a lock, but past one it would still be working through. */
+function holdClearOfLocks(route: TripPlan, hold: number): number {
+  for (const l of route.locks) {
+    const clear = l.s + CHAMBER_HALF + BOAT_LENGTH / 2 + LOCK_CLEARANCE;
+    if (l.s - LANDING_GAP < hold && clear > hold) hold = clear;
+  }
+  return hold;
 }
 
 /** A pose on the water: where the boat is, and which way it points. */

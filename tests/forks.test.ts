@@ -8,7 +8,8 @@ import { loadGame, saveGame } from '../src/sim/save';
 import { callTitle, describeDay, forkWords } from '../src/sim/status';
 import { NO_CONTROLS } from '../src/sim/trip';
 import { planWalkers } from '../src/sim/walkers';
-import { CANAL_WIDTH, MOORED_OFFSET, TOWPATH_OFFSET } from '../src/world/dimensions';
+import { CHAMBER_HALF } from '../src/sim/lock';
+import { BOAT_LENGTH, CANAL_WIDTH, MOORED_OFFSET, TOWPATH_OFFSET } from '../src/world/dimensions';
 import { checkStretch, resolveStretch } from '../src/world/stretch';
 import type { StretchData } from '../src/world/stretch';
 import { towpathRuns } from '../src/world/towpath';
@@ -161,6 +162,27 @@ describe('a day with more than one choice', () => {
     expect(again.trip.boat.s).toBeCloseTo(day.trip.boat.s, 3);
   });
 
+  it('waits for a junction past a lock just before it, never back inside it', () => {
+    const data: StretchData = { ...FORKS, features: FORKS.features.map((f) => (f.id === 'bottom-lock' ? { ...f, at: 2750 } : f)) };
+    const near = planDay(resolveStretch(data));
+    const day = newDay(near, { other: null, crewed: true });
+    const lock = day.plan.locks.find((l) => l.id === 'bottom-lock')!;
+    const elm = forkAhead(day, near)!;
+    expect(elm.s - lock.s).toBeLessThan(300);
+    expect(elm.hold).toBeGreaterThan(lock.s + CHAMBER_HALF + BOAT_LENGTH / 2);
+    castOffDay(day);
+    let last = day.trip.boat.s;
+    let cleared = false;
+    while (!day.held && day.time < 3600) {
+      for (const e of stepDay(day, near, NO_CONTROLS, STEP)) if (e.kind === 'cleared-lock') cleared = true;
+      expect(day.trip.boat.s).toBeGreaterThanOrEqual(last - 1e-9);
+      last = day.trip.boat.s;
+    }
+    expect(cleared).toBe(true);
+    expect(day.held).toBe(true);
+    expect(day.trip.boat.s).toBeCloseTo(elm.hold, 0);
+  });
+
   it('moors on a bank against the towpath, whichever side of its canal that is', () => {
     const north = stretch.ways.find((w) => w.id === 'north')!;
     for (const spot of north.spots) {
@@ -230,6 +252,17 @@ describe('the towpath along every canal', () => {
   it('has people walking every canal', () => {
     const walkers = planWalkers(runs, FORKS.seed);
     for (let i = 0; i < runs.length; i++) expect(walkers.filter((w) => w.run === i).length, `run ${i}`).toBeGreaterThan(0);
+  });
+});
+
+describe('where a way can moor', () => {
+  it('not short of a junction where ways that share its route still part', () => {
+    const short: StretchData = {
+      ...FORKS,
+      features: [...FORKS.features, { kind: 'bank', id: 'near-bank', name: 'Near bank', waterway: 'ashby', at: 4400, about: 'a bank', spots: [{ name: 'Here', at: 4480 }] }],
+      trip: { ...FORKS.trip, ways: FORKS.trip.ways.map((w) => (w.id === 'east' ? { ...w, to: 'near-bank' } : w)) },
+    };
+    expect(checkStretch(short)).toEqual(['the way east ends at near-bank before Bramble Junction, where ways that share its route part']);
   });
 });
 

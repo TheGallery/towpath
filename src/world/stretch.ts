@@ -477,6 +477,19 @@ export function checkStretch(data: StretchData): string[] {
     if (follows.every(Boolean) && !follows.every((w, i) => i === 0 || w?.leaves?.waterway === follows[i - 1]?.id)) problems.push(`the way ${way.id} doesn't follow its waterways from one to the branch that leaves it`);
   }
 
+  // A way can't moor short of a junction where ways that share its route still part, or the choice there would never come.
+  for (const way of data.trip.ways) {
+    const canal = way.route.at(-1);
+    const to = data.features.find((f) => f.id === way.to);
+    const track = canal === undefined ? undefined : curves.get(canal);
+    if (!to || !track || to.waterway !== canal) continue;
+    const sharing = data.trip.ways.filter((v) => v !== way && way.route.every((id, i) => v.route[i] === id));
+    for (const branch of data.waterways) {
+      if (branch.leaves?.waterway !== canal || !sharing.some((v) => v.route.includes(branch.id))) continue;
+      if (nearestDistance(track, waterwayCurve(data, branch).points[0]) > to.at) problems.push(`the way ${way.id} ends at ${way.to} before ${branch.leaves.junction}, where ways that share its route part`);
+    }
+  }
+
   // At every junction a footbridge carries the towpath over, so it can carry on along both canals.
   for (const branch of data.waterways) {
     if (!branch.leaves || junctionFootbridge(data, curves, branch)) continue;
