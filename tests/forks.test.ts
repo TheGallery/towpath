@@ -163,6 +163,11 @@ describe('a day with more than one choice', () => {
     expect(again.trip.boat.s).toBeCloseTo(day.trip.boat.s, 3);
   });
 
+  it.each([2930, 2960])('keeps a lock %i along, by the junction, on the ways that turn there', (at) => {
+    const near = resolveStretch({ ...FORKS, features: FORKS.features.map((f) => (f.id === 'bottom-lock' ? { ...f, at } : f)) });
+    for (const way of near.ways) expect(way.onRoute.map((f) => f.feature.id), way.id).toContain('bottom-lock');
+  });
+
   it('waits for a junction past a lock just before it, never back inside it', () => {
     const data: StretchData = { ...FORKS, features: FORKS.features.map((f) => (f.id === 'bottom-lock' ? { ...f, at: 2750 } : f)) };
     const near = planDay(resolveStretch(data));

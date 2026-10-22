@@ -214,9 +214,6 @@ export interface Stretch {
   readonly start: number;
 }
 
-/** How near a feature must be to the route's curve to count as on it. */
-const ON_ROUTE = 8;
-
 /** How far apart a road's points are where it's bent to cross a canal square. Half a deck, so the deck's ends fall on points. */
 const ROAD_STEP = BRIDGE_DECK / 2;
 /** How far either side of a canal a road runs straight and square to it: over its bridge and one step beyond. */
@@ -299,7 +296,7 @@ function findWaterway(data: StretchData, id: string): WaterwayData {
 }
 
 /** How far either side of a junction a route leaves the canals' centre lines, to round the corner into a branch. */
-const JUNCTION_ROUND = 60;
+export const JUNCTION_ROUND = 60;
 
 /**
  * Points round a corner, from `a` heading on from `before` to `b` heading on
@@ -338,9 +335,13 @@ function routeTrack(data: StretchData, curves: ReadonlyMap<string, Track>, way: 
     const curve = curveOf(branch);
     // The junction is a point on both curves; the route leaves one a little before it and joins the other a little after.
     const turn = points.findIndex((p) => Math.hypot(p[0] - curve.xs[0], p[1] - curve.ys[0]) < 1e-6);
+    if (turn < 0) throw new Error(`The way ${way.id} can't find ${branch.leaves.junction} on its route, where it turns into ${branch.id}`);
     let back = turn;
-    for (let gone = 0; back > 0 && gone < JUNCTION_ROUND; back--) gone += Math.hypot(points[back][0] - points[back - 1][0], points[back][1] - points[back - 1][1]);
+    let gone = 0;
+    for (; back > 0 && gone < JUNCTION_ROUND; back--) gone += Math.hypot(points[back][0] - points[back - 1][0], points[back][1] - points[back - 1][1]);
+    if (back < 1 || gone < JUNCTION_ROUND) throw new Error(`The way ${way.id} has no room to round the corner before ${branch.leaves.junction}`);
     const into = curve.ss.findIndex((s) => s >= JUNCTION_ROUND);
+    if (into < 0 || into + 1 >= curve.xs.length) throw new Error(`The way ${way.id} has no room to round the corner into ${branch.id}`);
     points = [...points.slice(0, back + 1), ...corner(points[back - 1], points[back], [curve.xs[into], curve.ys[into]], [curve.xs[into + 1], curve.ys[into + 1]]), ...curve.xs.slice(into).map((x, i): Point => [x, curve.ys[into + i]])];
     parent = branch;
   }
@@ -350,10 +351,13 @@ function routeTrack(data: StretchData, curves: ReadonlyMap<string, Track>, way: 
 /** Where a place on a waterway falls along a way, or null if the way doesn't pass it. */
 export function routeDistance(stretch: Pick<Stretch, 'waterways'>, way: Pick<Way, 'follows' | 'route'>, waterway: string, at: number): number | null {
   const track = stretch.waterways.get(waterway);
-  if (!track || !way.follows.includes(waterway)) return null;
+  const i = way.follows.indexOf(waterway);
+  if (!track || i < 0) return null;
+  // The way follows its waterway from where it joins it, at the start of its curve, to where it turns off into the next.
+  const next = i + 1 < way.follows.length ? stretch.waterways.get(way.follows[i + 1]) : undefined;
+  if (next && at > nearestDistance(track, [next.xs[0], next.ys[0]])) return null;
   const p = poseAt(track, at);
-  const point: Point = [p.x, p.y];
-  return distanceTo(way.route, point) <= ON_ROUTE ? nearestDistance(way.route, point) : null;
+  return nearestDistance(way.route, [p.x, p.y]);
 }
 
 /** Where the boat lies at each spot of a mooring: in a basin where it's placed, or on a bank against the towpath. */
@@ -519,6 +523,18 @@ export function checkStretch(data: StretchData): string[] {
   for (const way of data.trip.ways) {
     const follows = way.route.map((id) => data.waterways.find((w) => w.id === id));
     if (follows.every(Boolean) && !follows.every((w, i) => i === 0 || w?.leaves?.waterway === follows[i - 1]?.id)) problems.push(`the way ${way.id} doesn't follow its waterways from one to the branch that leaves it`);
+    else if (follows.every(Boolean)) {
+      // A way that turns into a branch rounds the corner, leaving its canal a little before the junction and joining the branch a little after.
+      for (let i = 1; i < way.route.length; i++) {
+        const [parent, branch] = [curves.get(way.route[i - 1]), curves.get(way.route[i])];
+        const junction = follows[i]?.leaves?.junction;
+        if (!parent || !branch) continue;
+        const at = nearestDistance(parent, [branch.xs[0], branch.ys[0]]);
+        if (i === 1 && at <= JUNCTION_ROUND) problems.push(`the way ${way.id} turns at ${junction} too near the start of ${way.route[0]} to round the corner`);
+        if (i > 1 && at <= 2 * JUNCTION_ROUND) problems.push(`the way ${way.id} turns at ${junction} too soon after turning at ${follows[i - 1]?.leaves?.junction} to round the corner`);
+        if (branch.length <= JUNCTION_ROUND + 10) problems.push(`the way ${way.id} turns into ${way.route[i]}, which is too short to round the corner into`);
+      }
+    }
   }
 
   // A way can't moor short of a junction where ways that share its route still part, or the choice there would never come.
