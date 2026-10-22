@@ -426,9 +426,16 @@ export function checkStretch(data: StretchData): string[] {
   }
 
   // Where the towpath turns off along a branch, a footbridge near the junction carries it over, so it can carry on along the main line too.
-  for (const id of data.trip.ways[0]?.route.slice(1) ?? []) {
-    if (!data.features.some((f) => f.kind === 'footbridge' && f.waterway === id && f.at <= ROVING_REACH)) problems.push(`no footbridge carries the towpath over ${id} by its junction`);
-  }
+  const firstWay = data.trip.ways[0];
+  const follows = firstWay?.route.map((id) => data.waterways.find((w) => w.id === id)) ?? [];
+  if (firstWay && follows.every((w, i) => w && (i === 0 || w.leaves?.waterway === follows[i - 1]?.id))) {
+    const way = { follows: firstWay.route, route: buildTrack(routePoints(data, firstWay), 5, waterwayCurve(data, findWaterway(data, firstWay.route[0])).before) };
+    for (const id of firstWay.route.slice(1)) {
+      // The towpath crosses by the branch's nearest footbridge, so that's the one that must be by the junction and on the way.
+      const footbridge = data.features.filter((f) => f.kind === 'footbridge' && f.waterway === id).sort((a, b) => a.at - b.at)[0];
+      if (!footbridge || footbridge.at > ROVING_REACH || routeDistance({ waterways: curves }, way, id, footbridge.at) === null) problems.push(`no footbridge carries the towpath over ${id} by its junction`);
+    }
+  } else if (firstWay && follows.every(Boolean)) problems.push(`the way ${firstWay.id} doesn't follow its waterways from one to the branch that leaves it`);
 
   // Spots to moor at keep clear of each other, and of the boats already there.
   for (const f of data.features) {
