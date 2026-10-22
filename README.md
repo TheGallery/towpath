@@ -57,7 +57,7 @@ Run the game:
 npm run dev      # open the printed local URL
 ```
 
-To try things out without waiting, add `?speed=10` to the address to run the game ten times faster (anything from 0.25 to 60 works): a whole day then takes about two minutes, plus the lock. Add `?weather=mist`, `?weather=drizzle` or `?weather=clear` to choose the weather for every day (drizzle then falls from when you cast off until the evening). Add `?lock=ready` or `?lock=against` (or both, as `?speed=10&lock=against`) to choose how the other boat leaves Brook Lock on a new day. The game keeps your place between visits, so add `?fresh` to set it aside and start a new day. A canal made with `?seed=` keeps its place apart from the Hallam Canal's, so trying one never loses the other.
+To try things out without waiting, add `?speed=10` to the address to run the game ten times faster (anything from 0.25 to 60 works): a whole day then takes about two minutes, plus the lock. Add `?weather=mist`, `?weather=drizzle` or `?weather=clear` to choose the weather for every day (drizzle then falls from when you cast off until the evening). Add `?lock=ready` or `?lock=against` (or both, as `?speed=10&lock=against`) to choose how the other boat leaves Brook Lock, or the first lock on a canal made from a seed, on a new day. The game keeps your place between visits, so add `?fresh` to set it aside and start a new day. A canal made with `?seed=` keeps its place apart from the Hallam Canal's, so trying one never loses the other.
 
 While `npm run dev` is running, add `?gallery` to the address for a page of the canals made from seeds 1 to 24, each a small sketch that opens the game on that canal; `?gallery&from=100` starts at seed 100.
 
