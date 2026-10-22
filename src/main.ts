@@ -9,6 +9,7 @@ import { answerLock, boatPose, canChooseWay, castOffDay, chooseSpot, chooseWay, 
 import type { DayEvent, Fork } from './sim/day';
 import { logLines } from './sim/logbook';
 import type { OtherWay } from './sim/otherboat';
+import { makeCanal } from './sim/playable';
 import { loadGame, saveGame } from './sim/save';
 import { PART_NAMES, callTitle, describeDay, forkWords, upcoming, waitedWords, wayWords } from './sim/status';
 import { NO_CONTROLS, boatsAt, lockForYou, steersItselfHere, wantsPart } from './sim/trip';
@@ -28,6 +29,7 @@ import type { View } from './view/camera';
 import { milesPerHour } from './world/dimensions';
 import { HALLAM } from './world/hallam';
 import { resolveStretch } from './world/stretch';
+import type { StretchData } from './world/stretch';
 import { towpathRuns } from './world/towpath';
 
 document.title = GAME_TITLE;
@@ -55,33 +57,45 @@ function readWeather(search: string): WeatherName | null {
   return asked === 'mist' || asked === 'drizzle' || asked === 'clear' ? asked : null;
 }
 
-/** Where your place is kept in the browser between visits. */
+/** `?seed=N` plays the canal made from seed N, a whole number, for trying things out; without it, or with `?seed=hallam`, it's the Hallam Canal. */
+function readSeed(search: string): number | null {
+  const asked = new URLSearchParams(search).get('seed');
+  const seed = asked === null || asked === '' ? NaN : Number(asked);
+  return Number.isSafeInteger(seed) && seed >= 0 ? seed : null;
+}
+
+/** Where your place is kept in the browser between visits, on the Hallam Canal or on a canal made from a seed, so trying one never loses the other. */
 const KEPT_KEY = 'towpath:place';
+const MADE_KEPT_KEY = 'towpath:place:made';
 /** How often your place is kept while you play, in milliseconds, besides when the tab is hidden or closed. */
 const KEEP_EVERY = 5000;
 
 /** Browser storage can be switched off or full, and the game carries on without it. */
 function readKept(): string | null {
   try {
-    return window.localStorage.getItem(KEPT_KEY);
+    return window.localStorage.getItem(keptKey);
   } catch {
     return null;
   }
 }
 
-const stretch = resolveStretch(HALLAM);
+const askedSeed = readSeed(window.location.search);
+// A seed that never makes a playable canal falls back to the Hallam Canal.
+const canal: StretchData = askedSeed === null ? HALLAM : makeCanal(askedSeed).data;
+const keptKey = canal === HALLAM ? KEPT_KEY : MADE_KEPT_KEY;
+const stretch = resolveStretch(canal);
 const dayPlan = planDay(stretch);
 const runs = towpathRuns(stretch);
-const walkers = planWalkers(runs, HALLAM.seed);
+const walkers = planWalkers(runs, canal.seed);
 const askedWay = readOtherWay(window.location.search);
 // `?fresh` sets your kept place aside and starts a new day.
-const kept = new URLSearchParams(window.location.search).has('fresh') ? null : loadGame(readKept(), dayPlan, HALLAM);
+const kept = new URLSearchParams(window.location.search).has('fresh') ? null : loadGame(readKept(), dayPlan, canal);
 // It's luck whether the other boat is coming down or going up ahead of you, and the next day gets the other.
 let otherWay: OtherWay = kept?.other ?? askedWay ?? (Math.random() < 0.5 ? 'down' : 'up');
 let day = kept?.day ?? newDay(dayPlan, { other: otherWay });
 const askedWeather = readWeather(window.location.search);
 // Each day's weather comes from the seed and the day's number, so a kept day comes back with the same sky.
-let weather: Weather = planWeather(HALLAM.seed, day.number, askedWeather);
+let weather: Weather = planWeather(canal.seed, day.number, askedWeather);
 const rate = readRate(window.location.search);
 const clock = new FixedStepClock(STEP, MAX_CATCH_UP);
 const camera = new FollowCamera(stretch.data.size);
@@ -93,7 +107,7 @@ let keptAt = 0;
 function keepPlace(): void {
   keptAt = performance.now();
   try {
-    window.localStorage.setItem(KEPT_KEY, saveGame({ day, other: otherWay, bell: bell.on }, HALLAM));
+    window.localStorage.setItem(keptKey, saveGame({ day, other: otherWay, bell: bell.on }, canal));
   } catch {
     // No storage: the day goes on, but won't be kept.
   }
@@ -211,7 +225,7 @@ const logbook = new LogbookView(document);
 /** Opens the day's logbook once it's written up in the evening, or closes it. */
 function toggleLogbook(): void {
   if (logbook.isOpen) logbook.close();
-  else if (day.log.written && !closeup.isOpen) logbook.open({ day: `Day ${day.number} · ${HALLAM.name}`, lines: logLines(day.log), seed: `Seed ${HALLAM.seed}` });
+  else if (day.log.written && !closeup.isOpen) logbook.open({ day: `Day ${day.number} · ${canal.name}`, lines: logLines(day.log), seed: `Seed ${canal.seed}` });
 }
 
 function back(): void {
@@ -233,7 +247,7 @@ const hud = new Hud(document, {
   onStartAgain: () => {
     otherWay = askedWay ?? (otherWay === 'down' ? 'up' : 'down');
     day = newDay(dayPlan, { other: otherWay, number: day.number + 1 });
-    weather = planWeather(HALLAM.seed, day.number, askedWeather);
+    weather = planWeather(canal.seed, day.number, askedWeather);
     logbook.close();
     hintedAt = -Infinity;
     askingSpot = false;

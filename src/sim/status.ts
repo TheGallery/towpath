@@ -153,7 +153,8 @@ export function forkWords(fork: Fork, option: readonly TripPlan[], plan: DayPlan
   const [first] = option;
   const { way } = wayWords(first, fork.name);
   if (option.length === 1) {
-    const locks = first.locks.filter((l) => l.s > fork.s).length;
+    // A lock past where the way moors, as at a mooring below one, isn't one you'll work today.
+    const locks = first.locks.filter((l) => l.s > fork.s && l.s < first.end).length;
     const lockWords = locks === 0 ? 'with no locks' : `and ${NUMBERS[locks] ?? locks} lock${locks === 1 ? '' : 's'}`;
     return { way, to: `to ${first.endName}, ${first.endAbout}, ${aboutMinutes(first.end - fork.s)} ${lockWords}` };
   }
