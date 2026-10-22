@@ -70,17 +70,28 @@ export function forkAhead(day: Pick<Day, 'ways' | 'plan'>, plan: DayPlan): Fork 
       const onto = w.junctions.find((k) => k.name === j.name)?.onto ?? '';
       options.set(onto, [...(options.get(onto) ?? []), w]);
     }
-    if (options.size > 1) return { name: j.name, s: j.s, hold: holdClearOfLocks(day.plan, j.s - HOLD_GAP), ring: j.s - HOLD_GAP - CALL_AHEAD, options: [...options.values()] };
+    if (options.size > 1) {
+      const hold = holdClearOfLocks(day.plan, j.s);
+      return { name: j.name, s: j.s, hold, ring: hold - CALL_AHEAD, options: [...options.values()] };
+    }
   }
   return null;
 }
 
-/** Where the boat waits for a junction: never inside a lock, but past one it would still be working through. */
-function holdClearOfLocks(route: TripPlan, hold: number): number {
-  for (const l of route.locks) {
-    const clear = l.s + CHAMBER_HALF + BOAT_LENGTH / 2 + LOCK_CLEARANCE;
-    if (l.s - LANDING_GAP < hold && clear > hold) hold = clear;
-  }
+/**
+ * Where the boat waits for a junction: never inside a lock, but past one it
+ * would still be working through, or below it where past it would be too near
+ * the junction.
+ */
+function holdClearOfLocks(route: TripPlan, junction: number): number {
+  const clear = (l: RouteLock) => l.s + CHAMBER_HALF + BOAT_LENGTH / 2 + LOCK_CLEARANCE;
+  const spanning = (s: number) => route.locks.find((l) => l.s - LANDING_GAP < s && clear(l) > s);
+  let hold = junction - HOLD_GAP;
+  const lock = spanning(hold);
+  if (!lock) return hold;
+  const past = clear(lock);
+  if (past + BOAT_LENGTH / 2 + LOCK_CLEARANCE < junction && !spanning(past)) return past;
+  for (let l: RouteLock | undefined = lock; l; l = spanning(hold)) hold = l.s - LANDING_GAP - LOCK_CLEARANCE;
   return hold;
 }
 

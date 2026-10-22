@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { distanceTo, nearestDistance, poseAt } from '../src/core/track';
 import { callKey } from '../src/sim/calls';
-import { castOffDay, chooseSpot, chooseWay, dayTimeline, forkAhead, needsYou, newDay, planDay, stepDay } from '../src/sim/day';
+import { canChooseWay, castOffDay, chooseSpot, chooseWay, dayTimeline, forkAhead, needsYou, newDay, planDay, stepDay } from '../src/sim/day';
 import type { Day, DayEvent } from '../src/sim/day';
 import { logLines } from '../src/sim/logbook';
 import { loadGame, saveGame } from '../src/sim/save';
 import { callTitle, describeDay, forkWords } from '../src/sim/status';
 import { NO_CONTROLS } from '../src/sim/trip';
 import { planWalkers } from '../src/sim/walkers';
-import { CHAMBER_HALF } from '../src/sim/lock';
+import { CHAMBER_HALF, LANDING_GAP } from '../src/sim/lock';
 import { BOAT_LENGTH, CANAL_WIDTH, MOORED_OFFSET, TOWPATH_OFFSET } from '../src/world/dimensions';
 import { checkStretch, resolveStretch } from '../src/world/stretch';
 import type { StretchData } from '../src/world/stretch';
@@ -181,6 +181,33 @@ describe('a day with more than one choice', () => {
     expect(cleared).toBe(true);
     expect(day.held).toBe(true);
     expect(day.trip.boat.s).toBeCloseTo(elm.hold, 0);
+  });
+
+  it('waits below a lock that sits right at a junction, and offers the choice there', () => {
+    const data: StretchData = { ...FORKS, features: FORKS.features.map((f) => (f.id === 'bottom-lock' ? { ...f, at: 2930 } : f)) };
+    const near = planDay(resolveStretch(data));
+    const day = newDay(near, { other: null, crewed: true });
+    const lock = day.plan.locks.find((l) => l.id === 'bottom-lock')!;
+    const elm = forkAhead(day, near)!;
+    expect(lock.s + CHAMBER_HALF + BOAT_LENGTH / 2).toBeGreaterThan(elm.s - BOAT_LENGTH / 2);
+    expect(elm.hold).toBeLessThan(lock.s - LANDING_GAP);
+    castOffDay(day);
+    let last = day.trip.boat.s;
+    const events: DayEvent[] = [];
+    const step = () => {
+      events.push(...stepDay(day, near, NO_CONTROLS, STEP));
+      expect(day.trip.boat.s).toBeGreaterThanOrEqual(last - 1e-9);
+      last = day.trip.boat.s;
+    };
+    while (!day.held && day.time < 3600) step();
+    expect(day.held).toBe(true);
+    expect(day.trip.boat.s).toBeCloseTo(elm.hold, 0);
+    expect(events.some((e) => e.kind === 'reached-lock')).toBe(false);
+    expect(canChooseWay(day, near)).toBe(true);
+    expect(chooseWay(day, near, 'east')).toContainEqual({ kind: 'chose-way', way: 'east', junction: 'Elm Junction' });
+    while (day.trip.boat.s < elm.s + 200 && day.time < 3600) step();
+    expect(events.some((e) => e.kind === 'cleared-lock' && e.lock === 'bottom-lock')).toBe(true);
+    expect(day.ways).toEqual(['mill', 'east']);
   });
 
   it('moors on a bank against the towpath, whichever side of its canal that is', () => {
