@@ -4,9 +4,11 @@
 // two rules for crossings, and every way it can go makes a whole day, with the
 // other boat coming down through the first lock or going up ahead of you: the
 // boat calls you to cast off, at every junction where the ways part, and at
-// dusk, which falls within the limits for a day.
+// dusk, which falls within the limits for a day. A canal's next day is made
+// the same way, from where the boat moored.
 
-import { generateStretch, crossingProblems, NoRoom } from '../world/generate';
+import { generateStretch, crossingProblems, daySeed, NoRoom } from '../world/generate';
+import type { StartPlace } from '../world/generate';
 import { HALLAM } from '../world/hallam';
 import { checkStretch, resolveStretch } from '../world/stretch';
 import type { StretchData } from '../world/stretch';
@@ -98,11 +100,26 @@ export interface MadeCanal {
 
 /** The canal for a seed: the first try that plays, or the Hallam Canal if none does. */
 export function makeCanal(seed: number): MadeCanal {
+  return firstThatPlays((attempt) => generateStretch(seed, attempt));
+}
+
+/**
+ * The stretch for a canal's next day, carrying on from where the boat moored:
+ * made from the canal's seed, the day's number and that place, the first try
+ * that plays, or the Hallam Canal if none does.
+ */
+export function makeDay(canal: number, day: number, from: StartPlace): MadeCanal {
+  const seed = daySeed(canal, day, from);
+  return firstThatPlays((attempt) => generateStretch(seed, attempt, from));
+}
+
+/** The first try that plays, of a canal each try lays out afresh, or the Hallam Canal if none does. */
+function firstThatPlays(lay: (attempt: number) => StretchData): MadeCanal {
   const thrownAway: string[] = [];
   for (let attempt = 0; attempt < MAX_TRIES; attempt++) {
     let data: StretchData;
     try {
-      data = generateStretch(seed, attempt);
+      data = lay(attempt);
     } catch (e) {
       if (!(e instanceof NoRoom)) throw e;
       thrownAway.push(e.message);

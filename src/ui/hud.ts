@@ -1,7 +1,7 @@
 // The words and buttons over the game: what's happening, who's steering, the
 // speed, what's next, what the boat is calling you for, the choices it asks
 // you to make, the map key, the bell, and the cards at the start and end of
-// the day, which can start a new canal.
+// the day, which can carry on to the next day or start a new canal.
 
 import type { DayPhase } from '../sim/day';
 import { canalNumber } from '../sim/playable';
@@ -15,15 +15,16 @@ export interface HudState {
   readonly mph: number;
   readonly next: Upcoming | null;
   readonly mapOpen: boolean;
-  /** True once the day is written up in the logbook, ready to read. */
+  /** True once there's a page of the logbook to read: today's, written up in the evening, or an earlier day's. */
   readonly logbook: boolean;
   /** What the boat needs you for, as the call button's words, or null when it needs nothing. */
   readonly call: string | null;
   /** How long it has waited for you, in words, once that's long enough to say. */
   readonly waited: string | null;
-  /** The words on the card at the end of the day. */
+  /** The words on the card at the end of the day, and on its button that carries on to the next. */
   readonly endTitle: string;
   readonly endText: string;
+  readonly carryOn: string;
 }
 
 /** A choice the boat asks you to make: a question and its answers. */
@@ -41,7 +42,8 @@ export interface HudOptions {
   /** How much faster than real time the game runs; 1 normally. */
   readonly rate: number;
   readonly onCastOff: () => void;
-  readonly onStartAgain: () => void;
+  /** Carries on to the next day, from where the boat moored. */
+  readonly onCarryOn: () => void;
   /** Starts a new game on the canal with the number typed, or a random one if none is. */
   readonly onNewCanal: (number: number | null) => void;
   readonly onToggleMap: () => void;
@@ -135,7 +137,6 @@ export class Hud {
       });
     }
     byId(doc, 'start-text').textContent = `Your narrowboat is moored at ${options.startName}. Cast off and it cruises by itself. When it needs you, at the lock, at the junction and at dusk, a soft bell rings and the tab's title says so. If you're busy, it waits, and if you close the tab it keeps your place. A day, from morning to morning, takes about ${minutes} minutes.`;
-    this.againButton.textContent = `Start a new day from ${options.startName}`;
 
     const rate = byId(doc, 'rate');
     if (options.rate !== 1) {
@@ -144,7 +145,7 @@ export class Hud {
     }
 
     this.castOffButton.addEventListener('click', options.onCastOff);
-    this.againButton.addEventListener('click', options.onStartAgain);
+    this.againButton.addEventListener('click', options.onCarryOn);
     this.mapButton.addEventListener('click', options.onToggleMap);
     this.callButton.addEventListener('click', options.onCall);
     this.bellButton.addEventListener('click', () => {
@@ -211,6 +212,7 @@ export class Hud {
       if (state.phase === 'over') {
         this.set(this.endTitle, 'end-title', state.endTitle);
         this.set(this.endText, 'end-text', state.endText);
+        this.set(this.againButton, 'again', state.carryOn);
         this.againButton.focus();
       }
     }

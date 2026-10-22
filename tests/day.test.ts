@@ -269,7 +269,7 @@ describe('the end of the day', () => {
     const phases = events.flatMap((e) => (e.kind === 'phase' ? [[e.phase, Math.round(day.time)]] : []));
     expect(phases.map(([p]) => p)).toEqual(['evening', 'night', 'dawn', 'over']);
     expect(events).toContainEqual({ kind: 'tied-up', spot: 'By the bench' });
-    expect(describeDay(day, plan)).toBe("Morning at Coppice Wood bank. That's the end of the prototype day.");
+    expect(describeDay(day, plan)).toBe('Morning at Coppice Wood bank. Carry on from here, or start a new canal.');
   });
 
   it('takes a short evening, night and dawn', () => {

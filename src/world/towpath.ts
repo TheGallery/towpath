@@ -5,7 +5,8 @@
 // run goes on down the branch from the footbridge's foot. Where a branch
 // leaves on the far side, its run starts by crossing the main line on the
 // footbridge just before the junction. At a basin it goes on round the quay to
-// the pub beside it. People come onto it and leave it at its ends, where one
+// the pub beside it, and from a basin where a canal starts it comes from the
+// pub round the quay. People come onto it and leave it at its ends, where one
 // run joins another, and where a bridge crosses it.
 
 import { buildTrack, distanceTo, nearestDistance, poseAt } from '../core/track';
@@ -186,6 +187,24 @@ export function towpathRuns(stretch: Stretch): TowpathRun[] {
     const crossing = [...(start?.crossing ?? [])];
     // Where along this canal the run being made has got to.
     let from = start?.from ?? 0;
+    // A basin by a canal's start is where it begins, and one further along where it ends.
+    const basins = data.features.filter((f): f is BasinData => f.kind === 'basin' && f.waterway === waterway.id);
+    const first = basins.find((f) => f.at < track.length / 2);
+    if (first) {
+      // From the pub, if there's one by it, round the quay and off it onto the bank: the way a run into a basin goes, turned round.
+      const area = first.area;
+      const leaving = along(track, side, 0, track.length);
+      const off = Math.max(0, leaving.findIndex((p) => outside(area, p) > QUAY));
+      const reached = leaving.slice(off, off + 20).reverse();
+      const there = reached[reached.length - 1];
+      const pub = data.pubs.find((p) => outside(area, p.at) < PUB_REACH);
+      const round = roundLoop(quay(area), there, pub?.at ?? there);
+      const into = pub ? between(round[round.length - 1], pub.at).slice(0, 2) : [];
+      const onto = [...reached, ...between(there, round[0])];
+      const smoothed = smooth([...onto, ...round, ...into], onto.length, 8);
+      points.push(...smooth(smoothed, onto.length + round.length - 1, 2).reverse());
+      from = nearestDistance(track, reached[0]) + STEP;
+    }
     const branches = data.waterways
       .filter((b) => b.leaves?.waterway === waterway.id)
       .map((b) => ({ branch: b, junction: nearestDistance(track, waterwayCurve(data, b).points[0]) }))
@@ -220,7 +239,7 @@ export function towpathRuns(stretch: Stretch): TowpathRun[] {
       starts.set(b.id, { lead: [], from: footbridge.at, crossing: [] });
     }
 
-    const basin = data.features.find((f): f is BasinData => f.kind === 'basin' && f.waterway === waterway.id);
+    const basin = basins.find((f) => f !== first);
     if (!basin) {
       runs.push(run(stretch, [...points, ...along(track, side, from, track.length)], crossing));
       runOf.set(waterway.id, runs[runs.length - 1]);

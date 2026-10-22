@@ -8,10 +8,11 @@ import { waitedFor } from './sim/calls';
 import { answerLock, boatPose, canChooseWay, castOffDay, chooseSpot, chooseWay, dayTimeline, eveningBegan, forkAhead, lightAt, needsYou, newDay, planDay, stepDay } from './sim/day';
 import type { DayEvent, Fork } from './sim/day';
 import { logLines } from './sim/logbook';
+import type { DayPage } from './sim/logbook';
 import type { OtherWay } from './sim/otherboat';
 import { makeCanal, randomSeed, readSeed } from './sim/playable';
-import { loadGame, saveGame } from './sim/save';
-import type { Canal } from './sim/save';
+import { dayPage, loadGame, nextMorning, saveGame } from './sim/save';
+import type { Canal, Kept } from './sim/save';
 import { PART_NAMES, callTitle, describeDay, forkWords, upcoming, waitedWords, wayWords } from './sim/status';
 import { NO_CONTROLS, boatsAt, lockForYou, steersItselfHere, wantsPart } from './sim/trip';
 import type { TripPlan } from './sim/trip';
@@ -89,6 +90,8 @@ const askedWay = readOtherWay(window.location.search);
 // It's luck whether the other boat is coming down or going up ahead of you, and the next day gets the other.
 let otherWay: OtherWay = kept?.other ?? askedWay ?? (Math.random() < 0.5 ? 'down' : 'up');
 let day = kept?.day ?? newDay(dayPlan, { other: otherWay });
+/** The earlier days' pages of the logbook, oldest first. */
+const pages: readonly DayPage[] = kept?.pages ?? [];
 const askedWeather = readWeather(window.location.search);
 // Each day's weather comes from the seed and the day's number, so a kept day comes back with the same sky.
 let weather: Weather = planWeather(canal.data.seed, day.number, askedWeather);
@@ -106,31 +109,67 @@ function keepPlace(): void {
   keptAt = performance.now();
   if (leaving) return;
   try {
-    window.localStorage.setItem(KEPT_KEY, saveGame({ canal, day, other: otherWay, bell: bell.on }));
+    window.localStorage.setItem(KEPT_KEY, saveGame({ canal, day, pages, other: otherWay, bell: bell.on }));
   } catch {
     // No storage: the day goes on, but won't be kept.
   }
 }
 
-/**
- * Starts a new game on canal no. `number`: keeps its first morning as your
- * place and opens the game again from it, at the same address without any
- * canal it asks for. If it can't be kept, the address asks for the canal.
- */
-function startCanal(number: number): void {
-  const next = canalFor(number);
-  const other = askedWay ?? (Math.random() < 0.5 ? 'down' : 'up');
+/** This address without the canal it asks for, or a fresh start, to open the game again at. */
+function plainAddress(): URL {
   const address = new URL(window.location.href);
   address.searchParams.delete('fresh');
   address.searchParams.delete('seed');
   address.hash = '';
+  return address;
+}
+
+/** Keeps a new place and opens the game again from it, at the plain address. False if it can't be kept. */
+function reopen(next: Kept): boolean {
   try {
-    window.localStorage.setItem(KEPT_KEY, saveGame({ canal: next, day: newDay(planDay(resolveStretch(next.data)), { other }), other, bell: bell.on }));
+    window.localStorage.setItem(KEPT_KEY, saveGame(next));
   } catch {
-    address.searchParams.set('seed', String(number));
+    return false;
   }
   leaving = true;
+  window.location.replace(plainAddress());
+  return true;
+}
+
+/**
+ * Starts a new game on canal no. `number`: keeps its first morning as your
+ * place and opens the game again from it. If it can't be kept, the address
+ * asks for the canal.
+ */
+function startCanal(number: number): void {
+  const next = canalFor(number);
+  const other = askedWay ?? (Math.random() < 0.5 ? 'down' : 'up');
+  if (reopen({ canal: next, day: newDay(planDay(resolveStretch(next.data)), { other }), pages: [], other, bell: bell.on })) return;
+  const address = plainAddress();
+  address.searchParams.set('seed', String(number));
+  leaving = true;
   window.location.replace(address);
+}
+
+/**
+ * Carries on to the next day: a new stretch of the canal from where the boat
+ * moored, made from the canal's seed, the day's number and that place, with
+ * today's page kept in the logbook. It keeps the next morning as your place
+ * and opens the game again from it. If it can't be kept, the next day starts
+ * here on today's stretch instead, from where today began.
+ */
+function carryOn(): void {
+  otherWay = askedWay ?? (otherWay === 'down' ? 'up' : 'down');
+  if (reopen(nextMorning({ canal, day, pages, other: otherWay, bell: bell.on }, stretch, otherWay))) return;
+  day = newDay(dayPlan, { other: otherWay, number: day.number + 1 });
+  weather = planWeather(canal.data.seed, day.number, askedWeather);
+  logbook.close();
+  hintedAt = -Infinity;
+  askingSpot = false;
+  camera.snap();
+  camera.setMap(false);
+  showRoute();
+  handle(castOffDay(day));
 }
 
 const found = document.getElementById('game');
@@ -242,17 +281,20 @@ function choose(number: number): void {
 }
 
 const logbook = new LogbookView(document);
-/** Opens the day's logbook once it's written up in the evening, or closes it. */
+/** Every page there is to read: the earlier days', and today's once it's written up in the evening. */
+const logbookPages = (): DayPage[] => [...pages, ...(day.log.written ? [dayPage(canal, day)] : [])];
+
+/** Opens the logbook at the latest page, or closes it. */
 function toggleLogbook(): void {
   if (logbook.isOpen) logbook.close();
-  else if (day.log.written && !closeup.isOpen) logbook.open(logbookPage());
+  else if (logbookPages().length && !closeup.isOpen) logbook.open(logbookPages().map(logbookPage));
 }
 
-/** The logbook's heading and foot: the canal's number and the day's, or the Hallam Canal's name, which has no number. */
-function logbookPage(): LogbookPage {
-  const lines = logLines(day.log);
-  if (canal.number === null) return { day: `Day ${day.number} · ${canal.data.name}`, lines, seed: `Seed ${canal.data.seed}` };
-  return { day: `Canal no. ${canal.number} · day ${day.number}`, lines, seed: canal.data.name };
+/** A page's heading and foot: the canal's number and the day's, with the day's stretch at the foot, or on the Hallam Canal, which has no number, the stretch's name, with its seed at the foot. */
+function logbookPage(page: DayPage): LogbookPage {
+  const lines = logLines(page.log);
+  if (canal.number === null) return { day: `Day ${page.number} · ${page.name}`, lines, seed: `Seed ${page.seed}` };
+  return { day: `Canal no. ${canal.number} · day ${page.number}`, lines, seed: page.name };
 }
 
 function back(): void {
@@ -272,19 +314,7 @@ const hud = new Hud(document, {
   dayMinutes,
   rate,
   onCastOff: () => handle(castOffDay(day)),
-  onStartAgain: () => {
-    otherWay = askedWay ?? (otherWay === 'down' ? 'up' : 'down');
-    day = newDay(dayPlan, { other: otherWay, number: day.number + 1 });
-    weather = planWeather(canal.data.seed, day.number, askedWeather);
-    logbook.close();
-    hintedAt = -Infinity;
-    askingSpot = false;
-    camera.snap();
-    camera.setMap(false);
-    showRoute();
-    handle(castOffDay(day));
-    keepPlace();
-  },
+  onCarryOn: () => carryOn(),
   onNewCanal: (number) => startCanal(number ?? randomSeed()),
   onToggleMap: () => toggleMap(),
   onCall: () => answerCall(),
@@ -406,11 +436,12 @@ function frame(now: number): void {
     mph: day.phase === 'underway' ? milesPerHour(trip.boat.v) : 0,
     next: upcoming(day.plan.places, trip.boat.s),
     mapOpen: camera.mapOpen,
-    logbook: day.log.written,
+    logbook: day.log.written || pages.length > 0,
     call,
     waited: day.calls.open && call ? waitedWords(waitedFor(day.calls, day.time)) : null,
     endTitle: `Morning at ${day.plan.endName}`,
-    endText: "The sun is up on a new day, and the boat is ready to cast off again. That's the end of the prototype day.",
+    endText: `The sun is up on a new day, and the boat is ready to cast off again. Carry on along the ${day.plan.legs[day.plan.legs.length - 1]?.name ?? 'canal'} from here, or start a new canal.`,
+    carryOn: `Carry on from ${day.plan.endName}`,
   });
   requestAnimationFrame(frame);
 }

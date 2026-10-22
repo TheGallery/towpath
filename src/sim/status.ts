@@ -114,7 +114,7 @@ export function describeDay(day: Day, plan: DayPlan): string {
     case 'dawn':
       return `Dawn. The sky lightens over ${p.endName}.`;
     case 'over':
-      return `Morning at ${p.endName}. That's the end of the prototype day.`;
+      return `Morning at ${p.endName}. Carry on from here, or start a new canal.`;
   }
 }
 

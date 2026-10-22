@@ -9,14 +9,16 @@
 // edge, or stop at a farm short of another canal. Villages, pubs, woods and
 // farms go where there's room for them. A try with no room for something is
 // thrown away; whether a canal makes a playable day is for the game's own
-// rules to say.
+// rules to say. A canal's next day is another stretch made the same way, which
+// starts at the bank or basin where the boat moored, with the boats there, and
+// carries on along the canal it was on.
 
 import { clamp, seededRandom, wrapAngle } from '../core/math';
 import { buildTrack, distanceTo, nearestDistance, poseAt } from '../core/track';
 import type { Point, Pose, Track } from '../core/track';
 import { BRIDGE_DECK, CANAL_WIDTH, TOWPATH_OFFSET } from './dimensions';
 import { BANK_SPOTS, FAR_ENDS, LANE_WORDS, LOCK_WORDS, POND_WORDS, PUBS, WOOD_KINDS, namer } from './names';
-import type { AreaData, BankData, BasinData, FarmData, FeatureData, PubData, RoadData, Stretch, StretchData, VillageData, WaterwayData, WayData } from './stretch';
+import type { AreaData, BankData, BasinBoatData, BasinData, FarmData, FeatureData, PubData, RoadData, Stretch, StretchData, VillageData, WaterwayData, WayData } from './stretch';
 import { towpathRuns } from './towpath';
 import type { TowpathRun } from './towpath';
 
@@ -43,6 +45,11 @@ const RUNS_ON = 0.45;
 
 /** Where the day starts, along the main line. */
 const START_AT = 322;
+/** Where a day that starts in a basin starts, along the main line leaving it, and how far in from the map's west edge that canal begins. */
+const BASIN_START = 100;
+const BASIN_X = 300;
+/** How near a mooring's spots a pub must be to be the pub it's by. */
+const PUB_BY = 250;
 /** How long the day aims to be along each way, in world units: about 11 to 17 minutes at cruising speed. */
 const WAY_LENGTH = { min: 4300, max: 6700 };
 /** How far either side of a lock its canal runs straight, through the lock and past its landings. */
@@ -63,6 +70,33 @@ function noRoom(why: string): never {
 
 /** Mixes numbers into one 32-bit seed. */
 const mix = (...ns: number[]): number => ns.reduce((h, n) => Math.imul(h ^ (n | 0), 0x9e3779b1) ^ (h >>> 15), 0x2545f491) | 0;
+
+/** Where a day moored, for the next day to start from: a bank, or a basin with the boats moored in it and the pub beside it, if there's one. */
+export interface StartPlace {
+  readonly kind: 'bank' | 'basin';
+  readonly name: string;
+  readonly about: string;
+  /** The canal it's on, which the next day carries on along. */
+  readonly canal: string;
+  /** The paint scheme of each boat moored there. */
+  readonly boats: readonly number[];
+  readonly pub: string | null;
+}
+
+/** Where a day on a stretch moors down one of its ways, for the next day to start from. */
+export function mooredAt(stretch: Stretch, way: string): StartPlace {
+  const { mooring, spots } = stretch.ways.find((w) => w.id === way) ?? stretch.ways[0];
+  const { data } = stretch;
+  const canal = data.waterways.find((w) => w.id === mooring.waterway)?.name ?? data.waterways[0].name;
+  if (mooring.kind === 'bank') return { kind: 'bank', name: mooring.name, about: mooring.about, canal, boats: [], pub: null };
+  const pub = data.pubs.find((p) => spots.some((s) => Math.hypot(p.at[0] - s.x, p.at[1] - s.y) < PUB_BY));
+  return { kind: 'basin', name: mooring.name, about: mooring.about, canal, boats: mooring.boats.map((b) => b.livery), pub: pub?.name ?? null };
+}
+
+/** The seed for a canal's next day: from the canal's own seed, the day's number, and where the boat moored. */
+export function daySeed(canal: number, day: number, from: StartPlace): number {
+  return mix(canal, day, ...[...`${from.canal}\n${from.name}`].map((c) => c.codePointAt(0) ?? 0)) >>> 0;
+}
 
 /** One of some choices, each as likely as its weight. */
 function weighted<T>(r: () => number, choices: readonly (readonly [T, number])[]): T {
@@ -175,8 +209,8 @@ class Busy {
   }
 }
 
-/** Lays out one try of a seed's canal. Throws NoRoom when something doesn't fit. */
-export function generateStretch(seed: number, attempt = 0): StretchData {
+/** Lays out one try of a seed's canal, starting where the boat moored the day before if it did. Throws NoRoom when something doesn't fit. */
+export function generateStretch(seed: number, attempt = 0, from: StartPlace | null = null): StretchData {
   const shape = dayShape(seed);
   const r = seededRandom(mix(seed, attempt, 0x2e7));
   const names = namer(seededRandom(mix(seed, attempt, 0x6a3)));
@@ -184,11 +218,15 @@ export function generateStretch(seed: number, attempt = 0): StretchData {
 
   // ---- The line of every canal, first without locks, then straightened where they go.
   const mainSteps = Array.from({ length: 24 }, (): Step => ({ length: 380 + 60 * r(), turn: (r() - 0.5) * 0.6 }));
-  const mainStart: Point = [-200, H * (0.3 + 0.4 * r())];
-  const mainHeading = (r() - 0.5) * 0.6;
+  // Out of a basin, the main line starts on the map and leaves it level, heading east, straight on past its mouth.
+  const startsInBasin = from?.kind === 'basin';
+  const startAt = startsInBasin ? BASIN_START : START_AT;
+  const mainStart: Point = [startsInBasin ? BASIN_X : -200, H * (0.3 + 0.4 * r())];
+  const heading = (r() - 0.5) * 0.6;
+  const mainHeading = startsInBasin ? 0 : heading;
   // Heading east, turning back from the top and bottom of the map.
   const steerMain = ([, y]: Point, h: number) => h + clamp(clamp(h, y < 1300 ? 0.25 : -0.7, y > H - 1300 ? -0.25 : 0.7) - h, -0.35, 0.35);
-  const layMain = (straight: ReadonlySet<number>) => walk(mainStart, mainHeading, mainSteps, straight, steerMain, ([x]) => x > W + 200);
+  const layMain = (straight: ReadonlySet<number>) => walk(mainStart, mainHeading, mainSteps, startsInBasin ? new Set([...straight, 1, 2]) : straight, steerMain, ([x]) => x > W + 200);
 
   const firstMain = layMain(new Set());
   const firstTrack = buildTrack(firstMain, 5);
@@ -227,7 +265,7 @@ export function generateStretch(seed: number, attempt = 0): StretchData {
         junction: n,
         kind,
         runsOn: !basin && (kind === 'lock-moorings' || shape.runsOn[k]),
-        need: clamp(wayLength() - (j.s - START_AT), 1000, basin || !shape.runsOn[k] ? 3400 : 4800),
+        need: clamp(wayLength() - (j.s - startAt), 1000, basin || !shape.runsOn[k] ? 3400 : 4800),
         turnOff: 1.0 + 0.35 * r(),
         steps: Array.from({ length: 40 }, (): Step => ({ length: 290 + 40 * r(), turn: (r() - 0.5) * 0.24 })),
       });
@@ -240,7 +278,7 @@ export function generateStretch(seed: number, attempt = 0): StretchData {
     const drift = same.length === 1 ? 0.3 + 1.0 * r() : 2.2 - (1.8 * q) / (same.length - 1) + (r() - 0.5) * 0.3;
     return { ...b, drift };
   });
-  const mainEndAim = START_AT + wayLength();
+  const mainEndAim = startAt + wayLength();
 
   /** A branch's points, from its junction on the main line. */
   const layBranch = (b: Branch, main: readonly Point[], laid: readonly (readonly Point[])[], straight: ReadonlySet<number>): Point[] => {
@@ -357,7 +395,7 @@ export function generateStretch(seed: number, attempt = 0): StretchData {
   const junctionS = junctions.map((j) => mainS[j.i]);
   const waterways: WaterwayData[] = [];
   const tracks = new Map<string, Track>([['main', main]]);
-  const canalName = `${names.place()} Canal`;
+  const canalName = from ? from.canal : `${names.place()} Canal`;
   waterways.push({ id: 'main', name: canalName, points: rounded(mainPoints), label: { at: 560, side: 1 } });
   const junctionNames = junctions.map(() => `${names.place()} Junction`);
   const branchNames = new Map<string, string>();
@@ -383,7 +421,7 @@ export function generateStretch(seed: number, attempt = 0): StretchData {
   const canals = () => [...tracks.values()];
 
   const busy = new Busy();
-  busy.take('main', START_AT, KEEP.start);
+  busy.take('main', startAt, KEEP.start);
   junctionS.forEach((s) => busy.take('main', s, KEEP.junction));
   for (const b of branches) busy.take(b.id, 0, KEEP.junction);
   const features: FeatureData[] = [];
@@ -469,7 +507,7 @@ export function generateStretch(seed: number, attempt = 0): StretchData {
     const branch = branches.find((b) => b.id === e.waterway);
     const along = branch ? junctionS[branch.junction] : e.end;
     const locks = [...lockAt.values()].filter((l) => (l.waterway === 'main' && l.s < along) || (l.waterway === e.waterway && l.s < e.end)).length;
-    if (along + (branch ? e.end : 0) - START_AT + locks * LOCK_WORTH < WAY_LENGTH.min - 300) noRoom('a way is too short for a day');
+    if (along + (branch ? e.end : 0) - startAt + locks * LOCK_WORTH < WAY_LENGTH.min - 300) noRoom('a way is too short for a day');
     const gap = inBasin(e.kind) ? KEEP.basin : KEEP.bank;
     const at = inBasin(e.kind) ? e.end : e.end + 150;
     if (!busy.free(e.waterway, at, gap)) noRoom('a mooring lands on a lock or a junction');
@@ -535,6 +573,41 @@ export function generateStretch(seed: number, attempt = 0): StretchData {
     busy.take(waterway, s, KEEP.bridge);
     return road;
   };
+
+  // ---- Where the day starts: the bank or basin the boat moored at last night, with the boats moored there and the pub beside it.
+  if (from?.kind === 'bank') {
+    features.push({ kind: 'bank', id: 'start', name: from.name, waterway: 'main', at: startAt - 100, labelSide: 1, about: from.about, spots: [{ name: 'Where you tied up last night', at: startAt }] });
+  } else if (from) {
+    // Laid out as a basin at the end of an arm coming in from the east, with the pub on the side there's room for.
+    const [x, y] = rounded(mainPoints)[0];
+    const fits = (vs: 1 | -1) => {
+      const area = { x: x - 196, y: vs > 0 ? y - 129 : y - 60, width: 420, height: 189 };
+      const pub: Point = [x + 6, vs > 0 ? y + 131 : y - 155];
+      const corners: Point[] = [[area.x, area.y], [area.x + area.width, area.y + area.height], [pub[0] - 90, pub[1] - 45], [pub[0] + 200, pub[1] + 65]];
+      return corners.every((q) => inMap(q, 60)) ? { area, pub } : null;
+    };
+    const vs: 1 | -1 = fits(1) ? 1 : -1;
+    const room = fits(vs) ?? noRoom('no room for the basin the day starts in');
+    const berths: BasinBoatData[] = [
+      { at: [x + 76, y - vs * 96], angle: 0, livery: 0 },
+      { at: [x - 34, y - vs * 96], angle: Math.PI, livery: 0 },
+      { at: [x - 152, y - vs * 41], angle: Math.PI / 2, livery: 0 },
+    ];
+    features.push({
+      kind: 'basin',
+      id: 'start',
+      name: from.name,
+      waterway: 'main',
+      at: 0,
+      area: room.area,
+      boats: from.boats.slice(0, berths.length).map((livery, i) => ({ ...berths[i], livery })),
+      about: from.about,
+      spots: [{ name: 'Where you tied up last night', at: [x - 100, y + vs * 33], angle: 0 }],
+    });
+    if (from.pub) pubs.push({ name: from.pub, at: room.pub });
+    // A basin with no pub is an old wharf, and its lane comes down over a bridge at its mouth, where the towpath ends.
+    else if (!bridge('main', 324, true)) noRoom('no room for the lane to the wharf');
+  }
 
   // ---- The moorings at the end of each way.
   const clearArea = (centre: Point, radius: Point, gap: number): boolean => {
@@ -739,9 +812,10 @@ export function generateStretch(seed: number, attempt = 0): StretchData {
   }
 
   // ---- Words on the map for where the canals go beyond it.
-  const fromName = names.place();
-  const startNote = poseAt(main, START_AT + 120, 170);
-  mapNotes.push({ text: `from ${fromName}`, at: [round(startNote.x), round(startNote.y)] });
+  // A day that carries on from where the boat moored starts there, and the canal behind it is yesterday's.
+  const fromName = from ? from.name : names.place();
+  const startNote = poseAt(main, startAt + 120, 170);
+  if (!from) mapNotes.push({ text: `from ${fromName}`, at: [round(startNote.x), round(startNote.y)] });
   let lastInside = 0;
   for (let s = 0; s < main.length; s += 20) if (inMap([poseAt(main, s).x, poseAt(main, s).y], 200)) lastInside = s;
   const endNote = poseAt(main, lastInside - 150, -150);
@@ -770,7 +844,7 @@ export function generateStretch(seed: number, attempt = 0): StretchData {
     farms,
     pubs,
     mapNotes,
-    trip: { from: { name: fromName, waterway: 'main', at: START_AT }, ways },
+    trip: { from: { name: fromName, waterway: 'main', at: startAt }, ways },
   };
 }
 
