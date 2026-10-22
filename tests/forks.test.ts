@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { distanceTo, nearestDistance, poseAt } from '../src/core/track';
+import { hullSpanWithin } from '../src/sim/boat';
 import { callKey } from '../src/sim/calls';
 import { canChooseWay, castOffDay, chooseSpot, chooseWay, dayTimeline, forkAhead, needsYou, newDay, planDay, stepDay } from '../src/sim/day';
 import type { Day, DayEvent } from '../src/sim/day';
@@ -9,7 +10,7 @@ import { callTitle, describeDay, forkWords } from '../src/sim/status';
 import { NO_CONTROLS } from '../src/sim/trip';
 import { planWalkers } from '../src/sim/walkers';
 import { CHAMBER_HALF, LANDING_GAP } from '../src/sim/lock';
-import { BOAT_LENGTH, CANAL_WIDTH, MOORED_OFFSET, TOWPATH_OFFSET } from '../src/world/dimensions';
+import { BOAT_BEAM, BOAT_LENGTH, CANAL_WIDTH, LOCK_REACH, LOCK_WIDTH, MOORED_OFFSET, TOWPATH_OFFSET } from '../src/world/dimensions';
 import { checkStretch, resolveStretch } from '../src/world/stretch';
 import type { StretchData } from '../src/world/stretch';
 import { towpathRuns } from '../src/world/towpath';
@@ -35,7 +36,7 @@ function run(day: Day, until: (d: Day) => boolean, limit = 3600, each?: (d: Day)
 }
 
 /** A day played by hand: casting off, working every lock, taking `way` at every fork, and mooring at the first spot. */
-function playDay(way: string, other: 'down' | 'up' = 'down'): { day: Day; rang: string[] } {
+function playDay(way: string, other: 'down' | 'up' = 'down', each?: (d: Day) => void): { day: Day; rang: string[] } {
   const day = newDay(plan, { other });
   const you = byHand(STEP);
   const rang: string[] = [];
@@ -46,6 +47,7 @@ function playDay(way: string, other: 'down' | 'up' = 'down'): { day: Day; rang: 
     if (open?.kind === 'cast-off') castOffDay(d);
     if (open?.kind === 'junction') chooseWay(d, plan, way);
     if (open?.kind === 'dusk') chooseSpot(d, 0);
+    each?.(d);
   });
   return { day, rang };
 }
@@ -218,6 +220,42 @@ describe('a day with more than one choice', () => {
       expect((spot.x - p.x) * p.nx + (spot.y - p.y) * p.ny).toBeCloseTo(-MOORED_OFFSET, 0);
     }
   });
+});
+
+describe('keeping the whole hull on the water, every way', () => {
+  const canals = [...stretch.waterways.values()];
+  const basins = FORKS.features.flatMap((f) => (f.kind === 'basin' ? [f.area] : []));
+  // Square to the nearest canal's centre line, so the corners of a hull on the water are within half its width.
+  const offCanal = (x: number, y: number) =>
+    Math.min(
+      ...canals.map((c) => {
+        const q = poseAt(c, nearestDistance(c, [x, y]));
+        return Math.abs((x - q.x) * q.nx + (y - q.y) * q.ny) - CANAL_WIDTH / 2;
+      }),
+    );
+  const inBasin = (x: number, y: number) => basins.some((a) => x > a.x && x < a.x + a.width && y > a.y && y < a.y + a.height);
+
+  it.each(['mill', 'east', 'north', 'south'])('never runs the hull over a bank or a lock wall on the way %s, through every lock and round every junction', (way) => {
+    let [overBank, overWalls, n] = [-Infinity, 0, 0];
+    const { day } = playDay(way, way === 'south' ? 'up' : 'down', (d) => {
+      if (n++ % 15) return;
+      const { boat } = d.trip;
+      for (const l of d.plan.locks) {
+        const span = hullSpanWithin(boat, l.s - LOCK_REACH, l.s + LOCK_REACH);
+        if (span) overWalls = Math.max(overWalls, span.right - LOCK_WIDTH / 2, -LOCK_WIDTH / 2 - span.left);
+      }
+      const p = poseAt(d.plan.route, boat.s, boat.d);
+      const a = p.angle + boat.psi;
+      for (const [u, v] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+        const x = p.x + (u * BOAT_LENGTH * Math.cos(a)) / 2 - (v * BOAT_BEAM * Math.sin(a)) / 2;
+        const y = p.y + (u * BOAT_LENGTH * Math.sin(a)) / 2 + (v * BOAT_BEAM * Math.cos(a)) / 2;
+        if (!inBasin(x, y)) overBank = Math.max(overBank, offCanal(x, y));
+      }
+    });
+    expect(day.phase).toBe('over');
+    expect(overWalls).toBeLessThan(1e-6);
+    expect(overBank).toBeLessThan(0.5);
+  }, DAY_TIMEOUT);
 });
 
 describe('the towpath along every canal', () => {
