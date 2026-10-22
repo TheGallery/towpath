@@ -3,7 +3,7 @@ import { poseAt } from '../src/core/track';
 import { seededRandom } from '../src/core/math';
 import { callKey } from '../src/sim/calls';
 import { castOffDay, chooseSpot, chooseWay, newDay, planDay, stepDay } from '../src/sim/day';
-import { dayProblems, makeCanal } from '../src/sim/playable';
+import { MAX_SEED, dayProblems, makeCanal, readSeed } from '../src/sim/playable';
 import { NO_CONTROLS } from '../src/sim/trip';
 import { BOAT_BEAM } from '../src/world/dimensions';
 import { JUNCTION_ODDS, LOCK_ODDS, MADE_SIZE, NoRoom, THREE_WAY, crossingProblems, dayShape, generateStretch } from '../src/world/generate';
@@ -176,6 +176,18 @@ describe('making a canal that plays', () => {
     expect(rang.filter((c) => c.startsWith('lock:'))).toEqual(way.locks.filter((l) => l.s < way.end).map((l) => `lock:${l.id}`));
     expect(rang.filter((c) => c.startsWith('junction:'))).toHaveLength(new Set(way.junctions.map((j) => j.name)).size);
   }, 30_000);
+
+  it('reads a seed from the address only as a whole number the generator can use', () => {
+    expect(readSeed('?seed=318')).toBe(318);
+    expect(readSeed('?seed=0')).toBe(0);
+    expect(readSeed('?seed=4294967295')).toBe(MAX_SEED);
+    expect(readSeed('?seed=4294967296')).toBeNull();
+    expect(readSeed('?seed=-1')).toBeNull();
+    expect(readSeed('?seed=3.5')).toBeNull();
+    expect(readSeed('?seed=')).toBeNull();
+    expect(readSeed('?seed=hallam')).toBeNull();
+    expect(readSeed('?speed=10')).toBeNull();
+  });
 
   it('finds the Hallam Canal playable, as a seed that never plays falls back to it', () => {
     expect(dayProblems(HALLAM)).toEqual([]);

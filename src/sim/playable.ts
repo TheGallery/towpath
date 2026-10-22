@@ -11,6 +11,7 @@ import { HALLAM } from '../world/hallam';
 import { checkStretch, resolveStretch } from '../world/stretch';
 import type { StretchData } from '../world/stretch';
 import { dayTimeline, planDay } from './day';
+import type { DayPlan } from './day';
 
 /** The shortest and longest a day may be, in minutes from casting off to dusk, with the locks worked for you. */
 export const DAY_MINUTES = { min: 11, max: 25 };
@@ -18,6 +19,30 @@ export const DAY_MINUTES = { min: 11, max: 25 };
 export const MAX_TRIES = 60;
 /** How finely the day is timed, in seconds: coarser than the game's step, which is close enough to tell. */
 const TIMING_STEP = 0.5;
+/** The biggest seed: the generator only uses a seed's lowest 32 bits, so a bigger one would be another seed's canal. */
+export const MAX_SEED = 2 ** 32 - 1;
+
+/** `?seed=N` asks for the canal made from seed N, a whole number from 0 to MAX_SEED; anything else, or none, is the Hallam Canal. */
+export function readSeed(search: string): number | null {
+  const asked = new URLSearchParams(search).get('seed');
+  const seed = asked === null || asked === '' ? NaN : Number(asked);
+  return Number.isInteger(seed) && seed >= 0 && seed <= MAX_SEED ? seed : null;
+}
+
+/** The junctions where the ways still open part along a way, in order: where its day should call you to choose. */
+function forksOn(plan: DayPlan, way: string): string[] {
+  const route = plan.ways.find((w) => w.way === way);
+  if (!route) return [];
+  let open = plan.ways;
+  const forks: string[] = [];
+  for (const j of route.junctions) {
+    const ontoAt = (w: (typeof open)[number]) => w.junctions.find((k) => k.name === j.name)?.onto ?? '';
+    const together = open.filter((w) => ontoAt(w) === ontoAt(route));
+    if (together.length < open.length) forks.push(j.name);
+    open = together;
+  }
+  return forks;
+}
 
 /** What keeps a stretch from making a playable day, in plain words, as far as the first way that fails. Empty when it plays. */
 export function dayProblems(data: StretchData): string[] {
@@ -28,11 +53,21 @@ export function dayProblems(data: StretchData): string[] {
   if (problems.length) return problems;
   const plan = planDay(stretch);
   for (const way of plan.ways) {
+    const forks = forksOn(plan, way.way);
     for (const other of ['down', 'up'] as const) {
-      const { calls, end } = dayTimeline(plan, way.way, other, TIMING_STEP);
+      const { calls, end, way: ended } = dayTimeline(plan, way.way, other, TIMING_STEP);
       const dusk = calls.find((c) => c.call === 'dusk');
       if (!dusk || calls[0]?.call !== 'cast-off' || end >= 4 * 60 * 60) {
         problems.push(`the day down the ${way.way} way never ends`);
+        continue;
+      }
+      const rang = calls.filter((c) => c.call === 'junction').map((c) => c.place ?? '');
+      if (rang.join('\n') !== forks.join('\n')) {
+        problems.push(`the day down the ${way.way} way calls you at ${rang.length ? rang.join(', ') : 'no junction'}, not ${forks.length ? forks.join(', ') : 'none'}`);
+        continue;
+      }
+      if (ended !== way.way) {
+        problems.push(`the day down the ${way.way} way ends up on the ${ended} way`);
         continue;
       }
       const minutes = dusk.at / 60;

@@ -9,7 +9,7 @@ import { answerLock, boatPose, canChooseWay, castOffDay, chooseSpot, chooseWay, 
 import type { DayEvent, Fork } from './sim/day';
 import { logLines } from './sim/logbook';
 import type { OtherWay } from './sim/otherboat';
-import { makeCanal } from './sim/playable';
+import { makeCanal, readSeed } from './sim/playable';
 import { loadGame, saveGame } from './sim/save';
 import { PART_NAMES, callTitle, describeDay, forkWords, upcoming, waitedWords, wayWords } from './sim/status';
 import { NO_CONTROLS, boatsAt, lockForYou, steersItselfHere, wantsPart } from './sim/trip';
@@ -55,13 +55,6 @@ function readOtherWay(search: string): OtherWay | null {
 function readWeather(search: string): WeatherName | null {
   const asked = new URLSearchParams(search).get('weather');
   return asked === 'mist' || asked === 'drizzle' || asked === 'clear' ? asked : null;
-}
-
-/** `?seed=N` plays the canal made from seed N, a whole number, for trying things out; without it, or with `?seed=hallam`, it's the Hallam Canal. */
-function readSeed(search: string): number | null {
-  const asked = new URLSearchParams(search).get('seed');
-  const seed = asked === null || asked === '' ? NaN : Number(asked);
-  return Number.isSafeInteger(seed) && seed >= 0 ? seed : null;
 }
 
 /** Where your place is kept in the browser between visits, on the Hallam Canal or on a canal made from a seed, so trying one never loses the other. */
