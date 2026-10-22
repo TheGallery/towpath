@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { poseAt } from '../src/core/track';
-import { CRUISE_SPEED, PASSING_SPEED, TOP_SPEED } from '../src/sim/boat';
-import { CHAMBER_HALF, LANDING_GAP, isGate, newLock } from '../src/sim/lock';
+import { nearestDistance, poseAt } from '../src/core/track';
+import { CRUISE_SPEED, PASSING_SPEED, TOP_SPEED, hullSpanWithin } from '../src/sim/boat';
+import { CHAMBER_HALF, GATE_SWING, LANDING_GAP, isGate, isOpen, newLock } from '../src/sim/lock';
 import type { GatePart, PaddlePart } from '../src/sim/lock';
+import { seededRandom } from '../src/core/math';
 import { gateDone, holdPaddle, newGateHand, newPaddleHand, paddleDone, pressPaddle, settlePaddle, swingBeam } from '../src/sim/mechanism';
 import type { GateHand, PaddleHand } from '../src/sim/mechanism';
 import { newOtherBoat, otherPose, stepOther } from '../src/sim/otherboat';
@@ -22,7 +23,8 @@ import {
   tripDuration,
   wantsPart,
 } from '../src/sim/trip';
-import type { Controls, Trip, TripEvent } from '../src/sim/trip';
+import type { Controls, Trip, TripEvent, TripPlan } from '../src/sim/trip';
+import { BOAT_BEAM, BOAT_LENGTH, CANAL_WIDTH, LOCK_REACH, LOCK_STRAIGHT, LOCK_WIDTH } from '../src/world/dimensions';
 import { HALLAM } from '../src/world/hallam';
 import { resolveStretch } from '../src/world/stretch';
 
@@ -299,6 +301,140 @@ describe('the other boat', () => {
       expect(events.filter((e) => e.kind === 'bump')).toEqual([]);
       expect(trip.phase).toBe('arrived');
       if (way === 'down') expect(closest).toBeLessThan(40);
+    }
+  });
+});
+
+describe('meeting the other boat', () => {
+  /** True if two hulls overlap, leaving out the very tips of their pointed bows. */
+  function hullsTouch(a: { x: number; y: number; angle: number }, b: { x: number; y: number; angle: number }): boolean {
+    const corners = (p: typeof a) => [[1, 1], [1, -1], [-1, -1], [-1, 1]].map(([u, v]) => [p.x + u * 34 * Math.cos(p.angle) - v * 5 * Math.sin(p.angle), p.y + u * 34 * Math.sin(p.angle) + v * 5 * Math.cos(p.angle)]);
+    const [ca, cb] = [corners(a), corners(b)];
+    // Two boxes are apart if some side of either has the other wholly beyond it.
+    for (const angle of [a.angle, a.angle + Math.PI / 2, b.angle, b.angle + Math.PI / 2]) {
+      const along = (c: number[]) => c[0] * Math.cos(angle) + c[1] * Math.sin(angle);
+      const [pa, pb] = [ca.map(along), cb.map(along)];
+      if (Math.max(...pa) < Math.min(...pb) || Math.max(...pb) < Math.min(...pa)) return false;
+    }
+    return true;
+  }
+
+  it('never swings its stern into your boat as it moves over, however you come to the lock', () => {
+    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      const random = seededRandom(seed);
+      let controls: Controls = NO_CONTROLS;
+      let change = 0;
+      const trip = underway('down');
+      let touched = false;
+      // You at the tiller, now and then, on the way to the lock.
+      while (trip.other?.phase !== 'gone' && trip.boat.s < lock.s && trip.time < 3600) {
+        if (trip.time > change) {
+          change = trip.time + 1 + random() * 4;
+          controls = { rudder: ([-1, 0, 1] as const)[Math.floor(random() * 3)], throttle: ([-1, 0, 1, 1] as const)[Math.floor(random() * 4)] };
+        }
+        stepTrip(trip, plan, controls, STEP);
+        const o = trip.other;
+        if (!o || o.phase === 'gone' || !plan.other) continue;
+        const p = poseAt(plan.route, trip.boat.s, trip.boat.d);
+        touched ||= hullsTouch({ x: p.x, y: p.y, angle: p.angle + trip.boat.psi }, otherPose(o, plan.other));
+      }
+      expect(touched).toBe(false);
+    }
+  });
+});
+
+describe('keeping the whole hull on the water', () => {
+  /** How far the hull reaches past a lock's walls, while any of it is between them. */
+  const overWalls = (t: Trip): number => {
+    const span = hullSpanWithin(t.boat, lock.s - LOCK_REACH, lock.s + LOCK_REACH);
+    return span ? Math.max(0, span.right - LOCK_WIDTH / 2, -LOCK_WIDTH / 2 - span.left) : 0;
+  };
+
+  /** Runs a trip with the locks worked for it, from cast-off until `until`, calling `each` after every step. */
+  function cruise(on: TripPlan, other: OtherWay | null, until: (t: Trip) => boolean, each: (t: Trip) => void): Trip {
+    const trip = newTrip(on, { other, crewed: true });
+    castOff(trip);
+    while (!until(trip) && trip.time < 3600) {
+      stepTrip(trip, on, NO_CONTROLS, STEP);
+      each(trip);
+    }
+    return trip;
+  }
+
+  it('waits for the lock on a straight reach, close enough to line up with it', () => {
+    expect(LANDING_GAP + BOAT_LENGTH / 2).toBeLessThan(LOCK_STRAIGHT);
+    expect(plan.narrows).toEqual([{ from: lock.s - LOCK_REACH, to: lock.s + LOCK_REACH, half: LOCK_WIDTH / 2 }]);
+  });
+
+  it('lines up from the landing and glides into the lock straight, never touching its stonework, however the other boat left it', () => {
+    // Without the walls, to see that the boat keeps off them by itself.
+    const open = { ...plan, narrows: [] };
+    for (const other of [null, 'down', 'up'] as const) {
+      let worst = 0;
+      let inside = false;
+      cruise(open, other, (t) => t.boat.s > lock.s + LOCK_REACH + BOAT_LENGTH, (t) => {
+        worst = Math.max(worst, overWalls(t));
+        inside ||= t.boat.s - BOAT_LENGTH / 2 > lock.s - LOCK_REACH;
+      });
+      expect(inside).toBe(true);
+      expect(worst).toBe(0);
+    }
+  });
+
+  it('stops short of the gates while they are shut', () => {
+    const trip = underway('up');
+    const you = byHand();
+    let closest = Infinity;
+    run(trip, (t) => t.phase === 'cruising' && t.boat.s > lock.s, 3600, NO_CONTROLS, (t) => {
+      const below = t.boat.s - BOAT_LENGTH / 2 < lock.s + GATE_SWING.bottomGates[0];
+      if (below && !isOpen(t.locks.get(lock.id)?.bottomGates ?? 0)) closest = Math.min(closest, lock.s + GATE_SWING.bottomGates[0] - (t.boat.s + BOAT_LENGTH / 2));
+      you.each(t);
+    });
+    expect(trip.boat.s).toBeGreaterThan(lock.s);
+    expect(closest).toBeGreaterThan(0);
+  });
+
+  it('keeps the hull between the walls even if it comes at the mouth crooked', () => {
+    const trip = underway();
+    run(trip, (t) => t.phase === 'in-lock');
+    trip.boat.d = 15;
+    trip.boat.psi = -0.3;
+    let worst = 0;
+    run(trip, (t) => t.phase === 'cruising', 3600, NO_CONTROLS, (t) => {
+      worst = Math.max(worst, overWalls(t));
+    });
+    expect(worst).toBeLessThan(1e-6);
+  });
+
+  it('keeps the whole hull on the canal all the way, both ways, round the bends, through the lock and into the arm', () => {
+    const canals = [...stretch.waterways.values()];
+    const basins = stretch.data.features.flatMap((f) => (f.kind === 'basin' ? [f.area] : []));
+    // Square to the nearest canal's centre line, so the corners of a hull on the water are within half its width.
+    const offCanal = (x: number, y: number) =>
+      Math.min(
+        ...canals.map((c) => {
+          const q = poseAt(c, nearestDistance(c, [x, y]));
+          return Math.abs((x - q.x) * q.nx + (y - q.y) * q.ny) - CANAL_WIDTH / 2;
+        }),
+      );
+    const inBasin = (x: number, y: number) => basins.some((a) => x > a.x && x < a.x + a.width && y > a.y && y < a.y + a.height);
+    for (const way of stretch.ways) {
+      const on = planTrip(stretch, way);
+      let worst = -Infinity;
+      let n = 0;
+      const trip = cruise(on, 'down', (t) => t.phase === 'arrived', (t) => {
+        if (n++ % 15) return;
+        const p = poseAt(on.route, t.boat.s, t.boat.d);
+        const a = p.angle + t.boat.psi;
+        for (const [u, v] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+          const x = p.x + (u * BOAT_LENGTH * Math.cos(a)) / 2 - (v * BOAT_BEAM * Math.sin(a)) / 2;
+          const y = p.y + (u * BOAT_LENGTH * Math.sin(a)) / 2 + (v * BOAT_BEAM * Math.cos(a)) / 2;
+
+          if (!inBasin(x, y)) worst = Math.max(worst, offCanal(x, y));
+        }
+      });
+      expect(trip.phase).toBe('arrived');
+      expect(worst).toBeLessThan(0.5);
     }
   });
 });

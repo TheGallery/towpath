@@ -47,19 +47,32 @@ export interface Obstacle {
   d: number;
 }
 
-/** How the boat is being steered this step: by the tiller, or towards a line on the water. */
+/** Where the water narrows between walls, as through a lock: from one distance along the route to another. */
+export interface Narrows {
+  from: number;
+  to: number;
+  /** Half the width of the water between the walls. */
+  half: number;
+}
+
+/** How far ahead the autopilot aims for its line, unless it's told to line up more sharply. */
+const LOOK_AHEAD = 70;
+
+/**
+ * How the boat is being steered this step: by the tiller, or towards a line on
+ * the water, aiming for it `lookAhead` ahead.
+ */
 export type Helm =
   | { kind: 'tiller'; rudder: number; speed: number }
-  | { kind: 'auto'; line: number; speed: number };
+  | { kind: 'auto'; line: number; speed: number; lookAhead?: number };
 
 export type Bump = 'bank' | 'boat';
 
 /** The turn rate the autopilot asks for, to follow `line` through the bends. */
-export function autopilotTurn(boat: Boat, route: Track, line: number): number {
+export function autopilotTurn(boat: Boat, route: Track, line: number, lookAhead = LOOK_AHEAD): number {
   const kappa = curvatureAt(route, boat.s);
   const along = boat.v * Math.cos(boat.psi) / (1 - kappa * boat.d);
   // Aim at a point on the line a little way ahead, so the boat eases back to it.
-  const lookAhead = 70;
   const wantPsi = Math.atan2(line - boat.d, lookAhead);
   const gain = 0.55 * clamp(Math.abs(boat.v) / CRUISE_SPEED, 0.35, 1);
   return clamp(kappa * along + gain * (wantPsi - boat.psi), -MAX_TURN * 1.5, MAX_TURN * 1.5);
@@ -71,12 +84,41 @@ export function hullSpan(boat: Boat): { left: number; right: number } {
   return { left: boat.d - swing, right: boat.d + swing };
 }
 
+/** The hull's corners, as distances along the route and right of the centre line. */
+function hullCorners(boat: Boat): [number, number][] {
+  const [c, s] = [Math.cos(boat.psi), Math.sin(boat.psi)];
+  return [[1, 1], [1, -1], [-1, -1], [-1, 1]].map(([u, v]) => [boat.s + u * HALF_LENGTH * c - v * HALF_BEAM * s, boat.d + u * HALF_LENGTH * s + v * HALF_BEAM * c]);
+}
+
+/** The widest the hull reaches either side of the centre line between two distances along the route, or null if none of it is there. */
+export function hullSpanWithin(boat: Boat, from: number, to: number): { left: number; right: number } | null {
+  // Trim the hull's outline to the stretch, one end at a time, and see how wide what's left is.
+  let outline = hullCorners(boat);
+  for (const inside of [(p: [number, number]) => p[0] - from, (p: [number, number]) => to - p[0]]) {
+    const kept: [number, number][] = [];
+    outline.forEach((a, i) => {
+      const b = outline[(i + 1) % outline.length];
+      const [ia, ib] = [inside(a), inside(b)];
+      if (ia >= 0) kept.push(a);
+      if (ia >= 0 !== ib >= 0) {
+        const t = ia / (ia - ib);
+        kept.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+      }
+    });
+    outline = kept;
+  }
+  if (outline.length === 0) return null;
+  const ds = outline.map((p) => p[1]);
+  return { left: Math.min(...ds), right: Math.max(...ds) };
+}
+
 /**
  * Moves the boat on by `dt` seconds. Bumps are soft: the hull is nudged back
  * onto the water, it straightens a little, and it loses some speed. The
  * autopilot never bumps; it just eases the hull clear, as when casting off.
+ * Where the water narrows between walls, the whole hull keeps between them.
  */
-export function moveBoat(boat: Boat, route: Track, helm: Helm, dt: number, obstacles: readonly Obstacle[] = []): Bump | null {
+export function moveBoat(boat: Boat, route: Track, helm: Helm, dt: number, obstacles: readonly Obstacle[] = [], narrows: readonly Narrows[] = []): Bump | null {
   const speedingUp = Math.abs(helm.speed) > Math.abs(boat.v) && helm.speed * boat.v >= 0;
   boat.v = approach(boat.v, helm.speed, (speedingUp ? ACCELERATION : BRAKING) * dt);
 
@@ -86,7 +128,7 @@ export function moveBoat(boat: Boat, route: Track, helm: Helm, dt: number, obsta
     const flow = clamp(Math.abs(boat.v) / CRUISE_SPEED, 0.25, 1);
     wantTurn = helm.rudder * MAX_TURN * flow;
   } else {
-    wantTurn = autopilotTurn(boat, route, helm.line);
+    wantTurn = autopilotTurn(boat, route, helm.line, helm.lookAhead);
   }
   boat.turn += (wantTurn - boat.turn) * (1 - Math.exp(-dt / TURN_LAG));
 
@@ -97,11 +139,11 @@ export function moveBoat(boat: Boat, route: Track, helm: Helm, dt: number, obsta
   boat.psi += (boat.turn - kappa * along) * dt;
   boat.psi = clamp(boat.psi, -1.2, 1.2);
 
-  const bump = keepOnTheWater(boat, obstacles, helm.kind === 'tiller');
+  const bump = keepOnTheWater(boat, obstacles, narrows, helm.kind === 'tiller');
   return helm.kind === 'tiller' ? bump : null;
 }
 
-function keepOnTheWater(boat: Boat, obstacles: readonly Obstacle[], soft: boolean): Bump | null {
+function keepOnTheWater(boat: Boat, obstacles: readonly Obstacle[], narrows: readonly Narrows[], soft: boolean): Bump | null {
   let bump: Bump | null = null;
   const soften = (towardsRight: boolean) => {
     if (!soft) return;
@@ -129,6 +171,25 @@ function keepOnTheWater(boat: Boat, obstacles: readonly Obstacle[], soft: boolea
     boat.d += leftLimit - span.left;
     bump = leftLimit > -BANK ? 'boat' : 'bank';
     soften(false);
+  }
+
+  for (const n of narrows) {
+    let within = hullSpanWithin(boat, n.from, n.to);
+    if (!within) continue;
+    // Coming in at too much of an angle to fit, the walls straighten it up.
+    for (let i = 0; i < 20 && within.right - within.left > 2 * n.half; i++) {
+      boat.psi *= 0.8;
+      within = hullSpanWithin(boat, n.from, n.to) ?? within;
+    }
+    if (within.right > n.half) {
+      boat.d -= within.right - n.half;
+      bump = 'bank';
+      soften(true);
+    } else if (within.left < -n.half) {
+      boat.d += -n.half - within.left;
+      bump = 'bank';
+      soften(false);
+    }
   }
   return bump;
 }

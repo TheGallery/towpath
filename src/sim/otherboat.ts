@@ -15,6 +15,8 @@ const HALF_LENGTH = BOAT_LENGTH / 2;
 /** How far right of the centre line a boat keeps when it might meet another. */
 export const KEEP_RIGHT = 12;
 const ACCELERATION = 0.5;
+/** How far clear of your boat, end to end, it is before it moves over. */
+const PASSING_GAP = 10;
 
 export type OtherWay = 'down' | 'up';
 
@@ -66,8 +68,12 @@ const stopping = (distance: number): number => (distance <= 0.3 ? 0 : Math.max(0
 
 export type OtherEvent = { readonly kind: 'set-off' } | { readonly kind: 'out-of-lock' } | { readonly kind: 'gone' };
 
-/** Moves the other boat on by `dt` seconds, working the lock as it goes. `yourS` is how far along your route you are. */
-export function stepOther(o: OtherBoat, plan: OtherBoatPlan, lock: LockState, dt: number, yourS: number): OtherEvent[] {
+/**
+ * Moves the other boat on by `dt` seconds, working the lock as it goes.
+ * `yourS` is how far along your route you are, and `yours` the stretch of the
+ * lock's canal your boat takes up, if it's on it.
+ */
+export function stepOther(o: OtherBoat, plan: OtherBoatPlan, lock: LockState, dt: number, yourS: number, yours: Span | null = null): OtherEvent[] {
   const events: OtherEvent[] = [];
   if (o.phase === 'gone') return events;
   if (o.phase === 'waiting') {
@@ -105,9 +111,13 @@ export function stepOther(o: OtherBoat, plan: OtherBoatPlan, lock: LockState, dt
     o.v = 0;
   }
 
-  // Through the lock it keeps to the middle, and out on the canal it keeps right.
+  // Through the lock it keeps to the middle, and out on the canal it keeps
+  // right. It holds its line while it's alongside your boat, so its stern
+  // never swings into you as it moves over.
   const along = Math.abs(o.x - before);
-  const line = Math.abs(o.x) < LANDING_GAP + 40 ? 0 : KEEP_RIGHT * ahead * plan.lock.uphill;
+  const theirs = otherSpan(o);
+  const alongside = yours !== null && yours.to > theirs.from - PASSING_GAP && yours.from < theirs.to + PASSING_GAP;
+  const line = alongside ? o.d : Math.abs(o.x) < LANDING_GAP + 40 ? 0 : KEEP_RIGHT * ahead * plan.lock.uphill;
   const dd = (line - o.d) * clamp(along / 35, 0, 1);
   o.d += dd;
   o.yaw = along > 1e-6 ? Math.atan2(dd * ahead * plan.lock.uphill, along) : o.yaw * 0.9;

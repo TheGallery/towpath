@@ -11,7 +11,7 @@ import type { Weather, WeatherNow } from '../sim/weather';
 import type { Trip } from '../sim/trip';
 import { dogAt, walkerAt } from '../sim/walkers';
 import type { Walker } from '../sim/walkers';
-import { CANAL_WIDTH, MOORED_OFFSET } from '../world/dimensions';
+import { CANAL_WIDTH, LOCK_REACH, LOCK_WIDTH, MOORED_OFFSET } from '../world/dimensions';
 import type { Spot, Stretch } from '../world/stretch';
 import type { TowpathRun } from '../world/towpath';
 import type { View } from '../view/camera';
@@ -157,7 +157,7 @@ export class Scene {
       if (f.kind !== 'lock') continue;
       const pose = lockPose(stretch, f);
       const g = element('g', { transform: transformFor(pose) }, moving);
-      const chamber = element('rect', { x: -72, y: -9, width: 144, height: 18, fill: COLOURS.water }, g);
+      const chamber = element('rect', { x: -72, y: -LOCK_WIDTH / 2, width: 144, height: LOCK_WIDTH, fill: COLOURS.water }, g);
       const rings = () => [0, 1].map(() => element('ellipse', { rx: 3, ry: 5, fill: 'none', stroke: COLOURS.waterLight, 'stroke-width': 1.2, opacity: 0 }, g));
       const out = rings();
       const into = rings();
@@ -273,7 +273,7 @@ export class Scene {
         if (d < nearest) [canal, nearest] = [t, d];
       }
       const isWater = (px: number, py: number) => {
-        for (const pose of locks) if (within(pose, px, py, 122, 54)) return within(pose, px, py, 122, 9);
+        for (const pose of locks) if (within(pose, px, py, LOCK_REACH, 54)) return within(pose, px, py, LOCK_REACH, LOCK_WIDTH / 2);
         if (moored.some((pose) => within(pose, px, py, 39, 6))) return false;
         if (basins.some((a) => px > a.x && px < a.x + a.width && py > a.y && py < a.y + a.height)) return true;
         return distanceTo(canal, [px, py]) < CANAL_WIDTH / 2;

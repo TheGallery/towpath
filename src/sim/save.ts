@@ -12,8 +12,12 @@ import type { Crew, LockState, Part } from './lock';
 import type { OtherBoat, OtherWay } from './otherboat';
 import type { Passage, Trip, TripPhase, TripPlan } from './trip';
 
-/** Bump this whenever the shape of a kept place changes, so older ones are set aside. */
-export const SAVE_VERSION = 1;
+/**
+ * Bump this whenever the shape of a kept place changes, or the stretch's
+ * canals move so that distances along them mean somewhere else, so older ones
+ * are set aside.
+ */
+export const SAVE_VERSION = 2;
 
 /** Everything kept between visits: the day, how the next day's lock will be, and whether the bell is on. */
 export interface Kept {
