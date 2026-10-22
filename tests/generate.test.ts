@@ -3,7 +3,7 @@ import { poseAt } from '../src/core/track';
 import { seededRandom } from '../src/core/math';
 import { callKey } from '../src/sim/calls';
 import { castOffDay, chooseSpot, chooseWay, newDay, planDay, stepDay } from '../src/sim/day';
-import { MAX_SEED, dayProblems, makeCanal, readSeed } from '../src/sim/playable';
+import { MAX_SEED, canalNumber, dayProblems, makeCanal, randomSeed, readSeed } from '../src/sim/playable';
 import { NO_CONTROLS } from '../src/sim/trip';
 import { BOAT_BEAM } from '../src/world/dimensions';
 import { JUNCTION_ODDS, LOCK_ODDS, MADE_SIZE, NoRoom, THREE_WAY, crossingProblems, dayShape, generateStretch } from '../src/world/generate';
@@ -188,6 +188,34 @@ describe('making a canal that plays', () => {
     expect(readSeed('?seed=hallam')).toBeNull();
     expect(readSeed('?speed=10')).toBeNull();
   });
+
+  it('reads a canal number typed in the game the same way, with room around it', () => {
+    expect(canalNumber('2610')).toBe(2610);
+    expect(canalNumber(' 318 ')).toBe(318);
+    expect(canalNumber('4294967295')).toBe(MAX_SEED);
+    for (const typed of ['', '  ', '4294967296', '-1', '3.5', 'hallam', null]) expect(canalNumber(typed)).toBeNull();
+  });
+
+  it('picks any canal number for a new game, from the first to the last', () => {
+    expect(randomSeed(() => 0)).toBe(0);
+    expect(randomSeed(() => 0.5)).toBe(2 ** 31);
+    expect(randomSeed(() => 1 - Number.EPSILON)).toBe(MAX_SEED);
+    const r = seededRandom(42);
+    const picks = Array.from({ length: 50 }, () => randomSeed(r));
+    expect(new Set(picks).size).toBe(50);
+    for (const seed of picks) expect(Number.isInteger(seed) && seed >= 0 && seed <= MAX_SEED).toBe(true);
+  });
+
+  it('gives a new game a canal that plays, whatever number it picks', () => {
+    const r = seededRandom(2610);
+    for (let i = 0; i < 5; i++) {
+      const seed = randomSeed(r);
+      const made = makeCanal(seed);
+      expect(made.fellBack).toBe(false);
+      expect(made.data.seed).toBe(seed);
+      expect(dayProblems(made.data)).toEqual([]);
+    }
+  }, 30_000);
 
   it('finds the Hallam Canal playable, as a seed that never plays falls back to it', () => {
     expect(dayProblems(HALLAM)).toEqual([]);

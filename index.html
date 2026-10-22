@@ -76,6 +76,7 @@
         <div class="card">
           <h1 id="start-title">Towpath</h1>
           <p class="tagline">Life at four miles an hour</p>
+          <p class="canal-name" id="start-canal"></p>
           <p id="start-text"></p>
           <ul class="controls">
             <li><span><kbd>←</kbd><kbd>→</kbd></span> Take the tiller and steer. Let go, and the boat carries on by itself.</li>
@@ -86,6 +87,10 @@
             <li><span><kbd>L</kbd></span> Read the logbook, once the day is written up in the evening.</li>
           </ul>
           <button type="button" class="primary" id="cast-off">Cast off</button>
+          <form class="new-canal" id="start-new-canal">
+            <button type="submit" class="secondary">Start a new canal</button>
+            <label>Canal no. <input type="text" name="canal" inputmode="numeric" autocomplete="off" maxlength="10" placeholder="any" /></label>
+          </form>
         </div>
       </section>
 
@@ -97,6 +102,10 @@
             <button type="button" class="primary" id="again"></button>
             <button type="button" class="secondary" id="end-logbook">Read the logbook</button>
           </div>
+          <form class="new-canal" id="end-new-canal">
+            <button type="submit" class="secondary">Start a new canal</button>
+            <label>Canal no. <input type="text" name="canal" inputmode="numeric" autocomplete="off" maxlength="10" placeholder="any" /></label>
+          </form>
         </div>
       </section>
 
