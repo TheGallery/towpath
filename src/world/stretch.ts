@@ -6,7 +6,7 @@
 import { clamp, lerp } from '../core/math';
 import { buildTrack, distanceTo, nearestDistance, poseAt } from '../core/track';
 import type { Point, Track } from '../core/track';
-import { BOAT_LENGTH, BRIDGE_DECK, MOORED_OFFSET } from './dimensions';
+import { BOAT_LENGTH, BRIDGE_DECK, CANAL_WIDTH, MOORED_OFFSET } from './dimensions';
 
 export interface WaterwayData {
   readonly id: string;
@@ -226,7 +226,7 @@ const BENT_BY = SQUARE_TO + 340;
 /** How near its canal's bridge a road must pass to be the road it carries. */
 const ROAD_AT_BRIDGE = 40;
 
-/** How near the junction a footbridge must cross a branch the towpath turns along, so the towpath can carry on along the main line too. */
+/** How near its junction a footbridge must carry a towpath over a canal where a branch leaves, so the towpath can carry on along both. */
 const ROVING_REACH = 200;
 
 /**
@@ -239,6 +239,52 @@ export function waterwayCurve(data: StretchData, waterway: WaterwayData): { poin
   // The parent's own points start after its junction point, if it is a branch itself.
   const at = waterway.leaves.atPoint + (parent.points.length - findWaterway(data, waterway.leaves.waterway).points.length);
   return { points: [parent.points[at], ...waterway.points], before: parent.points[at - 1] };
+}
+
+/** The points from the start of a branch's parent on into the branch, as a way that turns there follows them, and the point before them. */
+export function chainCurve(data: StretchData, branch: WaterwayData): { points: Point[]; before?: Point } {
+  if (!branch.leaves) return waterwayCurve(data, branch);
+  const parent = findWaterway(data, branch.leaves.waterway);
+  const curve = waterwayCurve(data, parent);
+  const at = branch.leaves.atPoint + (curve.points.length - parent.points.length);
+  return { points: [...curve.points.slice(0, at + 1), ...branch.points], before: curve.before };
+}
+
+/**
+ * Which bank a canal's towpath runs along, -1 the left and 1 the right: the
+ * right on a canal that leaves no other, and on a branch, the side it turns
+ * off to, so the towpath turns the corner into it along the same bank.
+ */
+export function towpathSide(waterways: ReadonlyMap<string, Track>, waterway: WaterwayData): 1 | -1 {
+  const parent = waterway.leaves && waterways.get(waterway.leaves.waterway);
+  const branch = waterways.get(waterway.id);
+  if (!parent || !branch) return 1;
+  const start = poseAt(branch, 0);
+  const q = poseAt(parent, nearestDistance(parent, [start.x, start.y]));
+  const p = poseAt(branch, Math.min(120, branch.length));
+  return (p.x - q.x) * q.nx + (p.y - q.y) * q.ny >= 0 ? 1 : -1;
+}
+
+/**
+ * The footbridge that carries the towpath over at a branch's junction, if
+ * there's one near enough. Where the branch leaves on its parent's towpath
+ * side, the parent's towpath crosses the branch near its mouth, then comes
+ * back to carry on. Where it leaves on the far side, the branch's towpath
+ * crosses the parent just before the junction, then turns into the branch.
+ */
+export function junctionFootbridge(data: StretchData, waterways: ReadonlyMap<string, Track>, branch: WaterwayData): FootbridgeData | null {
+  const parent = branch.leaves && data.waterways.find((w) => w.id === branch.leaves?.waterway);
+  const track = parent && waterways.get(parent.id);
+  if (!parent || !track) return null;
+  const footbridges = data.features.filter((f): f is FootbridgeData => f.kind === 'footbridge');
+  if (towpathSide(waterways, branch) === towpathSide(waterways, parent)) {
+    // The branch's nearest footbridge, which must be by the junction.
+    const nearest = footbridges.filter((f) => f.waterway === branch.id).sort((a, b) => a.at - b.at)[0];
+    return nearest && nearest.at <= ROVING_REACH ? nearest : null;
+  }
+  const junction = nearestDistance(track, waterwayCurve(data, branch).points[0]);
+  const before = footbridges.filter((f) => f.waterway === parent.id && f.at < junction - CANAL_WIDTH && f.at >= junction - ROVING_REACH).sort((a, b) => b.at - a.at);
+  return before[0] ?? null;
 }
 
 const curveTrack = (data: StretchData, waterway: WaterwayData): Track => {
@@ -278,13 +324,14 @@ export function routeDistance(stretch: Pick<Stretch, 'waterways'>, way: Pick<Way
   return distanceTo(way.route, point) <= ON_ROUTE ? nearestDistance(way.route, point) : null;
 }
 
-/** Where the boat lies at each spot of a mooring. */
-function spotsAt(waterways: ReadonlyMap<string, Track>, mooring: MooringData): Spot[] {
+/** Where the boat lies at each spot of a mooring: in a basin where it's placed, or on a bank against the towpath. */
+function spotsAt(data: StretchData, waterways: ReadonlyMap<string, Track>, mooring: MooringData): Spot[] {
   if (mooring.kind === 'basin') return mooring.spots.map((s) => ({ name: s.name, x: s.at[0], y: s.at[1], angle: s.angle }));
   const track = waterways.get(mooring.waterway);
   if (!track) return [];
+  const side = towpathSide(waterways, findWaterway(data, mooring.waterway));
   return mooring.spots.map((s) => {
-    const p = poseAt(track, s.at, MOORED_OFFSET);
+    const p = poseAt(track, s.at, side * MOORED_OFFSET);
     return { name: s.name, x: p.x, y: p.y, angle: p.angle };
   });
 }
@@ -354,7 +401,7 @@ export function resolveStretch(data: StretchData): Stretch {
 
     const end = onRoute.find((f) => f.feature.id === w.to);
     if (end?.feature.kind !== 'basin' && end?.feature.kind !== 'bank') throw new Error(`The way ${w.id} on ${data.id} does not end at a mooring on its route`);
-    return { id: w.id, follows: w.route, route, onRoute, junctions, end: Math.min(end.s, route.length), mooring: end.feature, spots: spotsAt(waterways, end.feature) };
+    return { id: w.id, follows: w.route, route, onRoute, junctions, end: Math.min(end.s, route.length), mooring: end.feature, spots: spotsAt(data, waterways, end.feature) };
   });
 
   const starts = ways.map((w) => routeDistance({ waterways }, w, data.trip.from.waterway, data.trip.from.at));
@@ -425,17 +472,31 @@ export function checkStretch(data: StretchData): string[] {
     if (way.route[0] !== data.trip.from.waterway) problems.push(`the way ${way.id} starts off the waterway the day begins on`);
   }
 
-  // Where the towpath turns off along a branch, a footbridge near the junction carries it over, so it can carry on along the main line too.
-  const firstWay = data.trip.ways[0];
-  const follows = firstWay?.route.map((id) => data.waterways.find((w) => w.id === id)) ?? [];
-  if (firstWay && follows.every((w, i) => w && (i === 0 || w.leaves?.waterway === follows[i - 1]?.id))) {
-    const way = { follows: firstWay.route, route: buildTrack(routePoints(data, firstWay), 5, waterwayCurve(data, findWaterway(data, firstWay.route[0])).before) };
-    for (const id of firstWay.route.slice(1)) {
-      // The towpath crosses by the branch's nearest footbridge, so that's the one that must be by the junction and on the way.
-      const footbridge = data.features.filter((f) => f.kind === 'footbridge' && f.waterway === id).sort((a, b) => a.at - b.at)[0];
-      if (!footbridge || footbridge.at > ROVING_REACH || routeDistance({ waterways: curves }, way, id, footbridge.at) === null) problems.push(`no footbridge carries the towpath over ${id} by its junction`);
+  for (const way of data.trip.ways) {
+    const follows = way.route.map((id) => data.waterways.find((w) => w.id === id));
+    if (follows.every(Boolean) && !follows.every((w, i) => i === 0 || w?.leaves?.waterway === follows[i - 1]?.id)) problems.push(`the way ${way.id} doesn't follow its waterways from one to the branch that leaves it`);
+  }
+
+  // A way can't moor short of a junction where ways that share its route still part, or the choice there would never come.
+  for (const way of data.trip.ways) {
+    const canal = way.route.at(-1);
+    const to = data.features.find((f) => f.id === way.to);
+    const track = canal === undefined ? undefined : curves.get(canal);
+    if (!to || !track || to.waterway !== canal) continue;
+    const sharing = data.trip.ways.filter((v) => v !== way && way.route.every((id, i) => v.route[i] === id));
+    for (const branch of data.waterways) {
+      if (branch.leaves?.waterway !== canal || !sharing.some((v) => v.route.includes(branch.id))) continue;
+      if (nearestDistance(track, waterwayCurve(data, branch).points[0]) > to.at) problems.push(`the way ${way.id} ends at ${way.to} before ${branch.leaves.junction}, where ways that share its route part`);
     }
-  } else if (firstWay && follows.every(Boolean)) problems.push(`the way ${firstWay.id} doesn't follow its waterways from one to the branch that leaves it`);
+  }
+
+  // At every junction a footbridge carries the towpath over, so it can carry on along both canals.
+  for (const branch of data.waterways) {
+    if (!branch.leaves || junctionFootbridge(data, curves, branch)) continue;
+    const parent = findWaterway(data, branch.leaves.waterway);
+    if (towpathSide(curves, branch) === towpathSide(curves, parent)) problems.push(`no footbridge carries the towpath over ${branch.id} by its junction`);
+    else problems.push(`no footbridge carries the towpath over ${parent.id} before ${branch.id} leaves it`);
+  }
 
   // Spots to moor at keep clear of each other, and of the boats already there.
   for (const f of data.features) {

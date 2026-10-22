@@ -88,7 +88,7 @@ describe('the logbook', () => {
     const rang = day.time;
     run(day, (d) => d.time >= rang + 5 * 60 + 10, { leave: ['lock'] });
     answerLock(day);
-    expect(day.log.waited.lock).toBeCloseTo(5 * 60 + 10, 0);
+    expect(day.log.waited['lock:brook-lock']).toBeCloseTo(5 * 60 + 10, 0);
     expect(logLines(day.log)[1].text).toBe('Tied up below Brook Lock to work it. The boat waited 5 min for you at the lock.');
   });
 
@@ -96,7 +96,7 @@ describe('the logbook', () => {
     const day = newDay(plan, { other: 'down', crewed: true });
     run(day, (d) => d.held);
     const held = day.time;
-    expect(day.log.waiting.junction).toBe(held);
+    expect(day.log.waiting['junction:Wendle Junction']).toBe(held);
     run(day, (d) => d.time >= held + 3 * 60);
     chooseWay(day, plan, 'arm');
     expect(logLines(day.log)[2].text).toBe('Turned right at Wendle Junction into the Wendle Arm, for Wendle Basin. The boat waited 3 min for you to choose.');
@@ -107,7 +107,7 @@ describe('the logbook', () => {
     castOffDay(day);
     chooseWay(day, plan, 'main');
     run(day, (d) => d.phase === 'over', { spot: 1 });
-    expect(day.log.waited.junction).toBeUndefined();
+    expect(day.log.waited['junction:Wendle Junction']).toBeUndefined();
     for (const line of logLines(day.log)) expect(line.text).not.toMatch(/waited/);
   });
 });

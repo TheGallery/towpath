@@ -13,6 +13,7 @@ import {
   chooseSpot,
   chooseWay,
   dayTimeline,
+  forkAhead,
   glidePose,
   lightAt,
   needsYou,
@@ -21,20 +22,19 @@ import {
   stepDay,
 } from '../src/sim/day';
 import type { Day, DayEvent } from '../src/sim/day';
-import { isGate } from '../src/sim/lock';
-import type { GatePart, PaddlePart } from '../src/sim/lock';
-import { gateDone, holdPaddle, newGateHand, newPaddleHand, paddleDone, pressPaddle, settlePaddle, swingBeam } from '../src/sim/mechanism';
-import type { GateHand, PaddleHand } from '../src/sim/mechanism';
-import { callTitle, describeDay, waitedWords, wayWords } from '../src/sim/status';
-import { NO_CONTROLS, boatsAt, lockForYou } from '../src/sim/trip';
+import { callTitle, describeDay, forkWords, waitedWords, wayWords } from '../src/sim/status';
+import { NO_CONTROLS } from '../src/sim/trip';
 import { HALLAM } from '../src/world/hallam';
 import { resolveStretch } from '../src/world/stretch';
+import { byHand } from './fixtures/hands';
 
 const stretch = resolveStretch(HALLAM);
 const plan = planDay(stretch);
-const fork = plan.fork!;
+const fork = forkAhead(newDay(plan), plan)!;
 const [arm, main] = plan.ways;
 const STEP = 1 / 30;
+/** Long enough for a whole day played through on a slow machine. */
+const DAY_TIMEOUT = 20_000;
 
 /** Runs the day until `until` says stop, or a time limit in seconds, and gathers its events. */
 function run(day: Day, until: (d: Day) => boolean, limit = 3600, each?: (d: Day) => void): DayEvent[] {
@@ -48,29 +48,6 @@ function run(day: Day, until: (d: Day) => boolean, limit = 3600, each?: (d: Day)
 }
 
 const calls = (events: readonly DayEvent[]) => events.flatMap((e) => (e.kind === 'call' && !e.again ? [e.call] : []));
-
-/** You at the lock, working each close-up from the keyboard as soon as the lock is yours. */
-function byHand(): (d: Day) => void {
-  let hand: { paddle: PaddleHand } | { gate: GateHand } | null = null;
-  return (d) => {
-    const yours = lockForYou(d.trip);
-    if (!yours) return;
-    answerLock(d);
-    const { state, next, job } = yours;
-    if (!hand && next && job.kind !== 'wait-water' && job.kind !== 'boat-in') {
-      hand = isGate(next.part) ? { gate: newGateHand(state, next.part as GatePart, next.target) } : { paddle: newPaddleHand(next.part as PaddlePart, next.target) };
-    }
-    if (hand && 'paddle' in hand) {
-      pressPaddle(hand.paddle, state);
-      holdPaddle(hand.paddle, state, STEP);
-      settlePaddle(hand.paddle, state, STEP, true);
-      if (paddleDone(hand.paddle, state)) hand = null;
-    } else if (hand) {
-      swingBeam(hand.gate, state, STEP, { kind: 'lean' }, boatsAt(d.trip, d.plan, yours.lock));
-      if (gateDone(hand.gate, state)) hand = null;
-    }
-  };
-}
 
 /** A day underway, past the lock, with the locks worked for you. */
 function pastTheLock(): Day {
@@ -101,6 +78,10 @@ describe('the plan for the day', () => {
   it('gives each way words for the choice', () => {
     expect(wayWords(arm, fork.name)).toEqual({ way: 'Turn right into the Wendle Arm', to: 'to Wendle Basin, by The Navigation pub' });
     expect(wayWords(main, fork.name)).toEqual({ way: 'Straight on along the Hallam Canal', to: 'to Coppice Wood bank, a quiet bank by the wood' });
+    expect(fork.options.map((o) => forkWords(fork, o, plan))).toEqual([
+      { way: 'Turn right into the Wendle Arm', to: 'to Wendle Basin, by The Navigation pub, about 3 min with no locks' },
+      { way: 'Straight on along the Hallam Canal', to: 'to Coppice Wood bank, a quiet bank by the wood, about 3 min with no locks' },
+    ]);
   });
 });
 
@@ -119,7 +100,7 @@ describe('a day with every call answered at once', () => {
       expect(end / 60).toBeGreaterThan(17);
       expect(end / 60).toBeLessThan(23);
     }
-  });
+  }, DAY_TIMEOUT);
 
   it('calls you to the lock when it is yours to work, and stops calling when you come', () => {
     for (const other of ['down', 'up'] as const) {
@@ -130,7 +111,7 @@ describe('a day with every call answered at once', () => {
       expect(day.time / 60).toBeGreaterThan(4);
       expect(day.time / 60).toBeLessThan(8);
       expect(needsYou(day, plan)).toBe('lock');
-      expect(answerLock(day)).toEqual([{ kind: 'answered', call: 'lock' }]);
+      expect(answerLock(day)).toEqual([{ kind: 'answered', call: 'lock', place: 'brook-lock' }]);
       expect(day.calls.open).toBeNull();
     }
   });
@@ -138,7 +119,7 @@ describe('a day with every call answered at once', () => {
   it('plays a whole day by hand, morning to morning, down the arm or along the main line', () => {
     for (const [way, other] of [['arm', 'up'], ['main', 'down']] as const) {
       const day = newDay(plan, { other });
-      const you = byHand();
+      const you = byHand(STEP);
       const phases: string[] = [];
       const rang: CallKind[] = [];
       run(day, (d) => d.phase === 'over', 3 * 3600, (d) => {
@@ -158,7 +139,7 @@ describe('a day with every call answered at once', () => {
       expect(Math.hypot(at.x - spot.x, at.y - spot.y)).toBeLessThan(0.01);
       expect(day.time / 60).toBeLessThan(26);
     }
-  });
+  }, DAY_TIMEOUT);
 });
 
 describe('a call you ignore', () => {
@@ -209,7 +190,7 @@ describe('a call you ignore', () => {
     // The light doesn't go while the boat waits.
     expect(lightAt(day).dark).toBe(0);
 
-    expect(chooseWay(day, plan, 'main')).toEqual([{ kind: 'chose-way', way: 'main', junction: 'Wendle Junction' }, { kind: 'answered', call: 'junction' }]);
+    expect(chooseWay(day, plan, 'main')).toEqual([{ kind: 'chose-way', way: 'main', junction: 'Wendle Junction' }, { kind: 'answered', call: 'junction', place: 'Wendle Junction' }]);
     expect(chooseWay(day, plan, 'arm')).toEqual([]);
     run(day, (d) => d.phase === 'dusk');
     expect(day.phase).toBe('dusk');

@@ -291,7 +291,7 @@ export class Scene {
     this.routeLength = upTo;
   }
 
-  /** The ways you can choose at the junction, on the map, or none once you've chosen. Click one to choose it. */
+  /** The ways you can choose at the next junction where they part, on the map, or none once there's nothing left to choose. Click one to choose it. */
   showChoices(ways: readonly WayChoice[] | null): void {
     this.choices.replaceChildren();
     this.choiceLines.length = 0;

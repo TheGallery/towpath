@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_REMINDERS, REMIND_EVERY, answer, newCallBook, remind, ring, waitedFor } from '../src/sim/calls';
+import { MAX_REMINDERS, REMIND_EVERY, answer, callKey, newCallBook, remind, ring, waitedFor } from '../src/sim/calls';
 
 describe('the boat calling you', () => {
   it('rings a call once, and keeps it waiting until you answer', () => {
@@ -25,6 +25,22 @@ describe('the boat calling you', () => {
     expect(answer(book, 'junction')).toBeNull();
     expect(ring(book, 'junction', 10)).toBe(false);
     expect(book.open).toBeNull();
+  });
+
+  it('rings once for each lock and each junction, by its place', () => {
+    const book = newCallBook();
+    expect(ring(book, 'lock', 0, 'top-lock')).toBe(true);
+    expect(book.open).toMatchObject({ kind: 'lock', place: 'top-lock' });
+    expect(answer(book, 'lock', 'bottom-lock')).toBeNull();
+    expect(answer(book, 'lock', 'top-lock')?.place).toBe('top-lock');
+    expect(ring(book, 'lock', 10, 'top-lock')).toBe(false);
+    expect(ring(book, 'lock', 10, 'middle-lock')).toBe(true);
+    answer(book, 'lock', 'middle-lock');
+    expect(ring(book, 'junction', 20, 'Ash Junction')).toBe(true);
+    answer(book, 'junction', 'Ash Junction');
+    expect(ring(book, 'junction', 30, 'Elm Junction')).toBe(true);
+    expect([...book.answered]).toEqual(['lock:bottom-lock', 'lock:top-lock', 'lock:middle-lock', 'junction:Ash Junction']);
+    expect(callKey('dusk')).toBe('dusk');
   });
 
   it('waits for one call at a time', () => {
