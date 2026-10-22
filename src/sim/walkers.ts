@@ -1,12 +1,13 @@
 // People on the towpath: walkers, some with a dog, and joggers. Each comes
-// onto the towpath at a bridge or an end of it, goes out a way, turns back,
+// onto the towpath at a bridge or an end of it, goes out a way (over the
+// footbridge at a junction, if it takes them that far), turns back,
 // and leaves where they came on, then comes out again a while later. Where
 // they are is worked out from the time of day alone, so there's nothing to
 // keep. In the evening everyone still out turns for home, and nobody new
 // comes out until the next day.
 
 import { seededRandom } from '../core/math';
-import { TOWPATH_OFFSET, unitsPerSecond } from '../world/dimensions';
+import { unitsPerSecond } from '../world/dimensions';
 import type { TowpathRun } from '../world/towpath';
 
 export type WalkerKind = 'walker' | 'jogger';
@@ -44,21 +45,21 @@ const KEEP_LEFT = 2.2;
 /** The day's people on the towpath, the same every day for the same seed. */
 export function planWalkers(runs: readonly TowpathRun[], seed: number, count = WALKERS): Walker[] {
   const r = seededRandom(seed ^ 0x5eed);
-  const total = runs.reduce((a, run) => a + run.to - run.from, 0);
+  const total = runs.reduce((a, run) => a + run.track.length, 0);
   const walkers: Walker[] = [];
   for (let i = 0; i < count; i++) {
     // Longer runs get more people.
     let run = 0;
     for (let pick = r() * total; run < runs.length - 1; run++) {
-      const length = runs[run].to - runs[run].from;
+      const length = runs[run].track.length;
       if (pick < length) break;
       pick -= length;
     }
-    const { from, to, exits } = runs[run];
+    const { track, exits } = runs[run];
     const home = exits[Math.floor(r() * exits.length)];
     const jogger = r() < 0.25;
-    const roomAhead = to - 10 - home;
-    const roomBehind = home - from - 10;
+    const roomAhead = track.length - 10 - home;
+    const roomBehind = home - 10;
     // Set off into the towpath, the longer way where there's a choice.
     const dir: 1 | -1 = roomAhead < 150 ? -1 : roomBehind < 150 ? 1 : r() < 0.5 ? 1 : -1;
     const room = dir > 0 ? roomAhead : roomBehind;
@@ -72,7 +73,7 @@ export function planWalkers(runs: readonly TowpathRun[], seed: number, count = W
   return walkers;
 }
 
-/** Someone out on the towpath: how far along their run, how far off the canal's middle, and which way they face. */
+/** Someone out on the towpath: how far along their run, how far off the towpath's middle, and which way they face. */
 export interface OnTowpath {
   readonly run: number;
   readonly s: number;
@@ -111,7 +112,7 @@ export function walkerAt(w: Walker, time: number, homeFrom: number | null): OnTo
   }
   if (gone <= 0) return null;
   const facing = out ? w.dir : w.dir === 1 ? -1 : 1;
-  return { run: w.run, s: w.home + w.dir * gone, d: TOWPATH_OFFSET - facing * KEEP_LEFT, facing, fromHome: gone };
+  return { run: w.run, s: w.home + w.dir * gone, d: -facing * KEEP_LEFT, facing, fromHome: gone };
 }
 
 /** A dog trots about round its walker, mostly a little ahead, nosing at the verge. */
@@ -120,5 +121,5 @@ export function dogAt(w: Walker, owner: OnTowpath, time: number): OnTowpath {
   // Close to heel where they step on and off the towpath.
   const heel = Math.min(1, owner.fromHome / 30);
   const ahead = (10 + 5 * Math.sin(time * 0.8 + k) + 1.5 * Math.sin(time * 2.3 + k * 2)) * heel;
-  return { ...owner, s: owner.s + owner.facing * ahead, d: TOWPATH_OFFSET + 3 * Math.sin(time * 1.3 + k * 3) };
+  return { ...owner, s: owner.s + owner.facing * ahead, d: 3 * Math.sin(time * 1.3 + k * 3) };
 }

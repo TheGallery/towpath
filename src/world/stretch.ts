@@ -3,9 +3,10 @@
 // points, and everything else placed by distance along a canal. The seed
 // drives the scenery, so the same stretch always looks the same.
 
+import { clamp, lerp } from '../core/math';
 import { buildTrack, distanceTo, nearestDistance, poseAt } from '../core/track';
 import type { Point, Track } from '../core/track';
-import { BOAT_LENGTH, MOORED_OFFSET } from './dimensions';
+import { BOAT_LENGTH, BRIDGE_DECK, MOORED_OFFSET } from './dimensions';
 
 export interface WaterwayData {
   readonly id: string;
@@ -216,6 +217,18 @@ export interface Stretch {
 /** How near a feature must be to the route's curve to count as on it. */
 const ON_ROUTE = 8;
 
+/** How far apart a road's points are where it's bent to cross a canal square. Half a deck, so the deck's ends fall on points. */
+const ROAD_STEP = BRIDGE_DECK / 2;
+/** How far either side of a canal a road runs straight and square to it: over its bridge and one step beyond. */
+const SQUARE_TO = BRIDGE_DECK + ROAD_STEP;
+/** How far from the canal a road has bent back to its own way. */
+const BENT_BY = SQUARE_TO + 340;
+/** How near its canal's bridge a road must pass to be the road it carries. */
+const ROAD_AT_BRIDGE = 40;
+
+/** How near the junction a footbridge must cross a branch the towpath turns along, so the towpath can carry on along the main line too. */
+const ROVING_REACH = 200;
+
 /**
  * The points a waterway's curve passes through, and for a branch the point
  * before the junction on its parent, which shapes how smoothly it turns off.
@@ -276,12 +289,46 @@ function spotsAt(waterways: ReadonlyMap<string, Track>, mooring: MooringData): S
   });
 }
 
+/**
+ * A road's points, bent to cross each canal square where a bridge carries it,
+ * as English roads do: straight over the bridge, so the deck meets the road on
+ * both banks, then bending smoothly back to its way.
+ */
+function roadPoints(data: StretchData, waterways: ReadonlyMap<string, Track>, road: RoadData): Point[] {
+  let points: Point[] = [...road.points];
+  for (const f of data.features) {
+    const canal = f.kind === 'bridge' && f.road === road.id ? waterways.get(f.waterway) : undefined;
+    if (!canal) continue;
+    const c = poseAt(canal, f.at);
+    const track = buildTrack(points, 10);
+    const s = nearestDistance(track, [c.x, c.y]);
+    const heading = poseAt(track, s).angle;
+    // Which way across the canal the road goes.
+    const k = Math.cos(heading) * c.nx + Math.sin(heading) * c.ny < 0 ? -1 : 1;
+    // Evenly spaced points along the road, one on the crossing, so the curve through them stays smooth.
+    const first = -Math.floor(s / ROAD_STEP);
+    const last = Math.floor((track.length - s) / ROAD_STEP);
+    const bent: Point[] = [];
+    for (let i = first; i <= last; i++) {
+      const d = i * ROAD_STEP;
+      const p = poseAt(track, s + d);
+      const t = clamp((Math.abs(d) - SQUARE_TO) / (BENT_BY - SQUARE_TO), 0, 1);
+      const w = t * t * (3 - 2 * t);
+      bent.push([lerp(c.x + c.nx * d * k, p.x, w), lerp(c.y + c.ny * d * k, p.y, w)]);
+    }
+    // The road still starts and ends where it did.
+    const ends = [points[0], points[points.length - 1]];
+    points = [ends[0], ...bent.filter((p) => ends.every((e) => Math.hypot(p[0] - e[0], p[1] - e[1]) > ROAD_STEP / 2)), ends[1]];
+  }
+  return points;
+}
+
 export function resolveStretch(data: StretchData): Stretch {
   const problems = checkStretch(data);
   if (problems.length) throw new Error(`The stretch ${data.id} has problems:\n${problems.join('\n')}`);
 
   const waterways = new Map(data.waterways.map((w) => [w.id, curveTrack(data, w)]));
-  const roads = new Map(data.roads.map((r) => [r.id, buildTrack(r.points, 10)]));
+  const roads = new Map(data.roads.map((r) => [r.id, buildTrack(roadPoints(data, waterways, r), 10)]));
 
   const ways = data.trip.ways.map((w): Way => {
     const first = findWaterway(data, w.route[0]);
@@ -335,7 +382,8 @@ export function checkStretch(data: StretchData): string[] {
     if (w.points.length < 2 && !w.leaves) problems.push(`${w.id} needs at least two points`);
   }
   if (problems.length) return problems;
-  for (const w of data.waterways) lengths.set(w.id, curveTrack(data, w).length);
+  const curves = new Map(data.waterways.map((w) => [w.id, curveTrack(data, w)]));
+  for (const [id, track] of curves) lengths.set(id, track.length);
 
   for (const f of data.features) {
     const length = lengths.get(f.waterway);
@@ -343,6 +391,12 @@ export function checkStretch(data: StretchData): string[] {
     else if (f.at < 0 || f.at > length + 0.5) problems.push(`${f.id} is ${Math.round(f.at)} along ${f.waterway}, which is only ${Math.round(length)} long`);
     if (f.kind === 'bank' && length !== undefined && f.spots.some((s) => s.at > length)) problems.push(`a spot at ${f.id} is beyond the end of ${f.waterway}`);
     if (f.kind === 'bridge' && !roadIds.has(f.road)) problems.push(`${f.id} carries ${f.road}, which doesn't exist`);
+    if (f.kind === 'bridge' && length !== undefined && roadIds.has(f.road)) {
+      const road = data.roads.find((r) => r.id === f.road);
+      const canal = curves.get(f.waterway);
+      const p = canal ? poseAt(canal, f.at) : null;
+      if (road && p && distanceTo(buildTrack(road.points, 10), [p.x, p.y]) > ROAD_AT_BRIDGE) problems.push(`${f.id} isn't where ${f.road} crosses ${f.waterway}`);
+    }
     if (f.kind === 'moorings') {
       const ats = f.boats.map((b) => b.at).sort((a, b) => a - b);
       for (let i = 1; i < ats.length; i++) if (ats[i] - ats[i - 1] < BOAT_LENGTH + 10) problems.push(`two boats at ${f.id} overlap`);
@@ -369,6 +423,11 @@ export function checkStretch(data: StretchData): string[] {
     if (!to) problems.push(`the way ${way.id} ends at ${way.to}, which doesn't exist`);
     else if (to.kind !== 'basin' && to.kind !== 'bank') problems.push(`the way ${way.id} ends at ${way.to}, which isn't a place to moor`);
     if (way.route[0] !== data.trip.from.waterway) problems.push(`the way ${way.id} starts off the waterway the day begins on`);
+  }
+
+  // Where the towpath turns off along a branch, a footbridge near the junction carries it over, so it can carry on along the main line too.
+  for (const id of data.trip.ways[0]?.route.slice(1) ?? []) {
+    if (!data.features.some((f) => f.kind === 'footbridge' && f.waterway === id && f.at <= ROVING_REACH)) problems.push(`no footbridge carries the towpath over ${id} by its junction`);
   }
 
   // Spots to moor at keep clear of each other, and of the boats already there.

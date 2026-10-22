@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { distanceTo, nearestDistance, poseAt } from '../src/core/track';
-import { BOAT_LENGTH, MOORED_OFFSET } from '../src/world/dimensions';
+import { BOAT_LENGTH, BRIDGE_DECK, MOORED_OFFSET } from '../src/world/dimensions';
 import { HALLAM } from '../src/world/hallam';
 import { checkStretch, resolveStretch, waterwayCurve } from '../src/world/stretch';
 import type { StretchData } from '../src/world/stretch';
@@ -102,6 +102,39 @@ describe('the Hallam stretch', () => {
     expect(at('brook-lock') - stretch.start).toBeGreaterThan(1500);
   });
 
+  it('carries every road square over its bridge, so the deck meets the road on both banks', () => {
+    for (const f of HALLAM.features) {
+      if (f.kind !== 'bridge') continue;
+      const canal = stretch.waterways.get(f.waterway);
+      const road = stretch.roads.get(f.road);
+      if (!canal || !road) throw new Error(f.id);
+      const c = poseAt(canal, f.at);
+      // The middle of the deck and both its ends, where it meets the road.
+      for (const d of [-BRIDGE_DECK, 0, BRIDGE_DECK]) {
+        const end: [number, number] = [c.x + c.nx * d, c.y + c.ny * d];
+        const r = poseAt(road, nearestDistance(road, end));
+        // On the road's middle, and running the way the deck does.
+        expect(Math.abs((end[0] - r.x) * r.nx + (end[1] - r.y) * r.ny)).toBeLessThan(0.5);
+        expect(Math.abs(Math.cos(r.angle) * c.ny - Math.sin(r.angle) * c.nx)).toBeLessThan(0.02);
+      }
+    }
+  });
+
+  it('bends each road back to its own way away from the canal', () => {
+    for (const data of HALLAM.roads) {
+      const road = stretch.roads.get(data.id);
+      if (!road) throw new Error(data.id);
+      const bridges = HALLAM.features.flatMap((f) => (f.kind === 'bridge' && f.road === data.id ? [poseAt(stretch.waterways.get(f.waterway) ?? arm.route, f.at)] : []));
+      for (const p of data.points) {
+        if (bridges.some((b) => Math.hypot(p[0] - b.x, p[1] - b.y) < 500)) continue;
+        const r = poseAt(road, nearestDistance(road, p));
+        expect(Math.abs((p[0] - r.x) * r.nx + (p[1] - r.y) * r.ny)).toBeLessThan(1);
+      }
+      expect(road.points[0]).toEqual(data.points[0]);
+      expect(road.points[road.points.length - 1]).toEqual(data.points[data.points.length - 1]);
+    }
+  });
+
   it('stays inside the world', () => {
     for (const track of stretch.waterways.values()) {
       for (let s = 0; s < track.length; s += 50) {
@@ -149,6 +182,16 @@ describe('checkStretch', () => {
   it('notices a bridge carrying a road that does not exist', () => {
     const problems = broken((d) => ({ ...d, features: d.features.map((f) => (f.kind === 'bridge' ? { ...f, road: 'no-road' } : f)) }));
     expect(problems.some((p) => p.includes('no-road'))).toBe(true);
+  });
+
+  it('notices a bridge that is not where its road crosses the canal', () => {
+    const problems = broken((d) => ({ ...d, features: d.features.map((f) => (f.id === 'hollin-bridge' ? { ...f, at: 2000 } : f)) }));
+    expect(problems).toContain("hollin-bridge isn't where hollin-lane crosses hallam");
+  });
+
+  it('notices no footbridge to carry the towpath over the arm by the junction', () => {
+    const problems = broken((d) => ({ ...d, features: d.features.filter((f) => f.kind !== 'footbridge') }));
+    expect(problems).toContain('no footbridge carries the towpath over wendle-arm by its junction');
   });
 
   it('notices a way that ends somewhere you cannot moor', () => {

@@ -6,7 +6,7 @@
 import { clamp, lerp, seededRandom } from '../core/math';
 import { distanceTo, nearestDistance, poseAt } from '../core/track';
 import type { Point, Pose, Track } from '../core/track';
-import { CANAL_WIDTH, MOORED_OFFSET, TOWPATH_OFFSET } from '../world/dimensions';
+import { BASIN_CORNER, BRIDGE_DECK, CANAL_WIDTH, MOORED_OFFSET, TOWPATH_OFFSET } from '../world/dimensions';
 import type { FeatureData, LockData, Stretch } from '../world/stretch';
 import { towpathRuns } from '../world/towpath';
 import type { Grazer } from '../sim/wildlife';
@@ -25,7 +25,9 @@ export interface Scenery {
   readonly defs: string;
   /** Everything under the boats. */
   readonly base: string;
-  /** Bridges, which boats pass under. */
+  /** Footbridges, which boats pass under and people walk over. */
+  readonly footbridges: string;
+  /** Road bridges, which boats and people pass under. */
   readonly top: string;
   /** The guidebook map. */
   readonly map: string;
@@ -74,6 +76,7 @@ export function paintScenery(stretch: Stretch): Scenery {
   const W = data.size.width;
   const H = data.size.height;
   const base: string[] = [];
+  const footbridges: string[] = [];
   const top: string[] = [];
   const map: string[] = [];
   const canals = [...stretch.waterways.values(), ...stretch.ways.map((w) => w.route)];
@@ -183,11 +186,11 @@ export function paintScenery(stretch: Stretch): Scenery {
   for (const [width, colour] of [[96, COLOURS.verge], [50, COLOURS.bank], [CANAL_WIDTH, COLOURS.water]] as const) {
     for (const d of canalPaths) base.push(tag('path', { d, stroke: colour, 'stroke-width': width, fill: 'none', 'stroke-linejoin': 'round' }));
     const g = (width - CANAL_WIDTH) / 2;
-    for (const { area: a } of basins) base.push(tag('rect', { x: a.x - g, y: a.y - g, width: a.width + 2 * g, height: a.height + 2 * g, rx: 26 + g, fill: colour }));
+    for (const { area: a } of basins) base.push(tag('rect', { x: a.x - g, y: a.y - g, width: a.width + 2 * g, height: a.height + 2 * g, rx: BASIN_CORNER + g, fill: colour }));
   }
   for (const w of stretch.ways) base.push(tag('path', { d: offsetPath(w.route, 0, 0, w.end), stroke: COLOURS.waterLight, 'stroke-width': 1.5, fill: 'none', opacity: 0.35, 'stroke-dasharray': '24 60' }));
 
-  const towpath = towpathRuns(stretch).map((run) => offsetPath(run.track, TOWPATH_OFFSET, run.from, run.to)).join('');
+  const towpath = towpathRuns(stretch).map((run) => smoothPath(run.track)).join('');
   base.push(tag('path', { d: towpath, stroke: COLOURS.towpathEdge, 'stroke-width': 15, fill: 'none', 'stroke-linejoin': 'round' }));
   base.push(tag('path', { d: towpath, stroke: COLOURS.towpath, 'stroke-width': 11, fill: 'none', 'stroke-linejoin': 'round' }));
   for (const d of canalPaths) map.push(tag('path', { d, stroke: MAP_COLOURS.water, 'stroke-width': 26, fill: 'none', 'stroke-linejoin': 'round' }));
@@ -327,7 +330,7 @@ export function paintScenery(stretch: Stretch): Scenery {
       top.push(placed(pose(), bridgeMarkup()));
       map.push(placed(pose(), tag('path', { d: 'M-14 -42V42M14 -42V42', stroke: COLOURS.ink, 'stroke-width': 7 })));
     } else if (f.kind === 'footbridge') {
-      top.push(placed(pose(), footbridgeMarkup()));
+      footbridges.push(placed(pose(), footbridgeMarkup()));
       map.push(placed(pose(), tag('path', { d: 'M0 -34V34', stroke: COLOURS.ink, 'stroke-width': 6 })));
     }
   }
@@ -349,7 +352,7 @@ export function paintScenery(stretch: Stretch): Scenery {
     .join('');
 
   const herds = placeHerds(stretch, meadows, (pt) => clearOf(pt, 75) && trees.every(([x, y, rad]) => Math.hypot(x - pt[0], y - pt[1]) > rad + 10) && houses.every((h) => Math.hypot(h.x - pt[0], h.y - pt[1]) > 70) && data.pubs.every((pub) => Math.hypot(pub.at[0] + 50 - pt[0], pub.at[1] - pt[1]) > 220));
-  return { defs, base: base.join(''), top: top.join(''), map: map.join(''), labels: mapLabels(stretch), lamps, herds };
+  return { defs, base: base.join(''), footbridges: footbridges.join(''), top: top.join(''), map: map.join(''), labels: mapLabels(stretch), lamps, herds };
 }
 
 /** How many meadows have animals in, and how far from the canal they can be and still be seen from the boat. */
@@ -412,10 +415,10 @@ function lockStonework(): string {
 
 function bridgeMarkup(): string {
   return (
-    tag('rect', { x: -17, y: -56, width: 34, height: 112, rx: 3, fill: COLOURS.stone }) +
-    tag('rect', { x: -11, y: -56, width: 22, height: 112, fill: COLOURS.road }) +
-    tag('rect', { x: -17, y: -56, width: 5, height: 112, fill: COLOURS.stoneDark }) +
-    tag('rect', { x: 12, y: -56, width: 5, height: 112, fill: COLOURS.stoneDark })
+    tag('rect', { x: -17, y: -BRIDGE_DECK, width: 34, height: 2 * BRIDGE_DECK, rx: 3, fill: COLOURS.stone }) +
+    tag('rect', { x: -11, y: -BRIDGE_DECK, width: 22, height: 2 * BRIDGE_DECK, fill: COLOURS.road }) +
+    tag('rect', { x: -17, y: -BRIDGE_DECK, width: 5, height: 2 * BRIDGE_DECK, fill: COLOURS.stoneDark }) +
+    tag('rect', { x: 12, y: -BRIDGE_DECK, width: 5, height: 2 * BRIDGE_DECK, fill: COLOURS.stoneDark })
   );
 }
 

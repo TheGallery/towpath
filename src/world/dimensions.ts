@@ -9,8 +9,14 @@ export const BOAT_BEAM = 10;
 /** Width of open water in the canal. */
 export const CANAL_WIDTH = 44;
 
+/** The radius of a basin's rounded corners. */
+export const BASIN_CORNER = 26;
+
 /** How far the towpath's centre is from the canal's centre line, on the right-hand side. */
 export const TOWPATH_OFFSET = 33;
+
+/** How far a road bridge's deck reaches either side of the canal's centre line, where it meets the road. */
+export const BRIDGE_DECK = 56;
 
 /** How far a moored boat's centre is from the canal's centre line. */
 export const MOORED_OFFSET = 17;

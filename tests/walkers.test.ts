@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { poseAt } from '../src/core/track';
+import { distanceTo, nearestDistance, poseAt } from '../src/core/track';
+import type { Track } from '../src/core/track';
 import { EVENING_TIME, NIGHT_TIME, castOffDay, chooseSpot, chooseWay, eveningBegan, newDay, planDay, stepDay } from '../src/sim/day';
 import { NO_CONTROLS } from '../src/sim/trip';
 import { JOG_SPEED, WALKERS, WALK_SPEED, dogAt, planWalkers, walkerAt } from '../src/sim/walkers';
 import type { Walker } from '../src/sim/walkers';
-import { TOWPATH_OFFSET } from '../src/world/dimensions';
+import { BASIN_CORNER, CANAL_WIDTH, TOWPATH_OFFSET } from '../src/world/dimensions';
 import { HALLAM } from '../src/world/hallam';
 import { resolveStretch } from '../src/world/stretch';
 import { towpathRuns } from '../src/world/towpath';
@@ -22,25 +23,75 @@ function sample(w: Walker, from: number, to: number, homeFrom: number | null = n
   return out;
 }
 
+/** Where a bridge or footbridge meets the towpath's bank, on either side of its canal. */
+const feet = (id: string) => {
+  const f = HALLAM.features.find((x) => x.id === id);
+  const canal = f && stretch.waterways.get(f.waterway);
+  if (!canal) throw new Error(id);
+  return [poseAt(canal, f.at, TOWPATH_OFFSET), poseAt(canal, f.at, -TOWPATH_OFFSET)];
+};
+const off = (track: Track, p: { x: number; y: number }) => distanceTo(track, [p.x, p.y]);
+const footbridge = feet('wendle-footbridge');
+/** Where the first run crosses the footbridge, from the near foot to the far one. */
+const deck = footbridge.map((p) => nearestDistance(runs[0].track, [p.x, p.y]));
+
 describe('the towpath', () => {
-  it('runs along the first way and on along the main line past the junction', () => {
+  it('runs along the first way, over the footbridge by the junction and on along the main line, and on down the arm', () => {
     expect(runs).toHaveLength(2);
-    const [arm, main] = runs;
-    expect(arm.track).toBe(stretch.ways[0].route);
-    // Stops short of the basin, where the pub garden meets the water.
-    expect(arm.to).toBeLessThan(stretch.ways[0].end);
-    expect(main.track).toBe(stretch.waterways.get('hallam'));
-    expect(main.to).toBe(main.track.length);
+    const [main, arm] = runs;
+    // Over the footbridge, square across the arm.
+    for (const p of footbridge) expect(off(main.track, p)).toBeLessThan(4);
+    expect(deck[1] - deck[0]).toBeGreaterThan(2 * TOWPATH_OFFSET - 4);
+    expect(deck[1] - deck[0]).toBeLessThan(2 * TOWPATH_OFFSET + 12);
+    // On along the main line to the edge of the stretch.
+    const hallam = stretch.waterways.get('hallam');
+    if (!hallam) throw new Error('hallam');
+    const end = poseAt(main.track, main.track.length);
+    expect(Math.hypot(end.x - poseAt(hallam, hallam.length, TOWPATH_OFFSET).x, end.y - poseAt(hallam, hallam.length, TOWPATH_OFFSET).y)).toBeLessThan(4);
+    // The arm's run starts at the footbridge's foot.
+    const start = poseAt(arm.track, 0);
+    expect(Math.hypot(start.x - footbridge[0].x, start.y - footbridge[0].y)).toBeLessThan(4);
   });
 
-  it('has a way on and off at each end and at every bridge that crosses it', () => {
-    const [arm, main] = runs;
-    // Both ends, Hollin Bridge, Mill Bridge and the footbridge over the arm.
-    expect(arm.exits).toHaveLength(5);
-    expect(main.exits).toEqual([main.from, main.to]);
+  it('has a way on and off at each end, where the runs join, and at every bridge that crosses it', () => {
+    const [main, arm] = runs;
+    // Both ends, Hollin Bridge, Mill Bridge, and the foot of the footbridge, where the arm's run joins.
+    expect(main.exits).toHaveLength(5);
+    expect(main.exits[3]).toBeCloseTo(deck[0], -1);
+    expect(arm.exits).toEqual([0, arm.track.length]);
     for (const run of runs) expect([...run.exits].sort((a, b) => a - b)).toEqual(run.exits);
-    const hollin = poseAt(arm.track, arm.exits[1]);
+    const hollin = poseAt(main.track, main.exits[1]);
     expect(Math.hypot(hollin.x - 980, hollin.y - 2282)).toBeLessThan(120);
+  });
+
+  it('never ends in the open: each end is at a bridge, a footbridge, the edge of the stretch, or the pub by the basin', () => {
+    const ends = HALLAM.features.filter((f) => f.kind === 'bridge' || f.kind === 'footbridge').flatMap((f) => feet(f.id));
+    const { width, height } = HALLAM.size;
+    for (const run of runs) {
+      for (const s of [0, run.track.length]) {
+        const p = poseAt(run.track, s);
+        const offEdge = p.x < 0 || p.x > width || p.y < 0 || p.y > height;
+        const atBridge = ends.some((q) => Math.hypot(p.x - q.x, p.y - q.y) < 4);
+        const atPub = HALLAM.pubs.some((pub) => Math.hypot(p.x - pub.at[0], p.y - pub.at[1]) < 60);
+        expect(offEdge || atBridge || atPub).toBe(true);
+      }
+    }
+  });
+
+  it('keeps to the bank, out of the water but for the footbridge', () => {
+    const basin = HALLAM.features.find((f) => f.kind === 'basin');
+    if (basin?.kind !== 'basin') throw new Error('no basin');
+    const a = basin.area;
+    runs.forEach((run, i) => {
+      for (let s = 0; s <= run.track.length; s += 5) {
+        if (i === 0 && s > deck[0] - 1 && s < deck[1] + 1) continue;
+        const p = poseAt(run.track, s);
+        for (const canal of stretch.waterways.values()) expect(off(canal, p)).toBeGreaterThan(CANAL_WIDTH / 2 + 4);
+        // Out of the basin's water, with its rounded corners.
+        const [cx, cy] = [Math.min(Math.max(p.x, a.x + BASIN_CORNER), a.x + a.width - BASIN_CORNER), Math.min(Math.max(p.y, a.y + BASIN_CORNER), a.y + a.height - BASIN_CORNER)];
+        expect(Math.hypot(p.x - cx, p.y - cy) - BASIN_CORNER).toBeGreaterThan(4);
+      }
+    });
   });
 });
 
@@ -81,13 +132,22 @@ describe('people on the towpath', () => {
           last = null;
           continue;
         }
-        expect(at.s).toBeGreaterThanOrEqual(run.from);
-        expect(at.s).toBeLessThanOrEqual(run.to);
-        expect(Math.abs(at.d - TOWPATH_OFFSET)).toBeLessThan(HALF_PATH);
+        expect(at.s).toBeGreaterThanOrEqual(0);
+        expect(at.s).toBeLessThanOrEqual(run.track.length);
+        expect(Math.abs(at.d)).toBeLessThan(HALF_PATH);
         if (last) expect(Math.abs(at.s - last.s)).toBeLessThanOrEqual(w.speed * (t - last.t) + 1e-6);
         last = { t, s: at.s };
       }
     }
+  });
+
+  it('cross the footbridge by the junction and carry on along the far bank', () => {
+    const crossers = walkers.filter((w) => {
+      if (w.run !== 0) return false;
+      const seen = sample(w, 0, 3600, null, 1).flatMap(({ at }) => (at ? [at.s] : []));
+      return seen.some((s) => s < deck[0] - 20) && seen.some((s) => s > deck[1] + 20);
+    });
+    expect(crossers.length).toBeGreaterThan(0);
   });
 
   it('go out a way, turn, and come back, facing the way they walk', () => {
@@ -105,8 +165,8 @@ describe('people on the towpath', () => {
     for (const w of walkers) {
       for (const { at } of sample(w, 0, 600, null, 3)) {
         if (!at) continue;
-        if (at.facing > 0) expect(at.d).toBeLessThan(TOWPATH_OFFSET);
-        else expect(at.d).toBeGreaterThan(TOWPATH_OFFSET);
+        if (at.facing > 0) expect(at.d).toBeLessThan(0);
+        else expect(at.d).toBeGreaterThan(0);
       }
     }
   });
@@ -117,7 +177,7 @@ describe('people on the towpath', () => {
         if (!at) continue;
         const dog = dogAt(w, at, t);
         expect(Math.abs(dog.s - at.s)).toBeLessThanOrEqual(18);
-        expect(Math.abs(dog.d - TOWPATH_OFFSET)).toBeLessThan(HALF_PATH);
+        expect(Math.abs(dog.d)).toBeLessThan(HALF_PATH);
         // Close to heel where they step off.
         if (at.fromHome < 5) expect(Math.abs(dog.s - at.s)).toBeLessThan(3);
       }

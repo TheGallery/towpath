@@ -175,8 +175,9 @@ export class Scene {
     element('circle', { r: 22, fill: 'transparent' }, this.focus);
     element('circle', { r: 11, class: 'world-glow', fill: 'none' }, this.focus);
     this.focus.addEventListener('click', onPart);
-    // People on the towpath, under the bridges they come and go by.
-    const people = element('g', { class: 'towpath-people', 'pointer-events': 'none' }, moving);
+    // People on the towpath, over the footbridges and under the road bridges they come and go by.
+    element('g', {}, svg).innerHTML = scenery.footbridges;
+    const people = element('g', { class: 'towpath-people', 'pointer-events': 'none' }, svg);
     for (const walker of towpath.walkers) {
       const dog = walker.dog ? element('g', { display: 'none' }, people) : null;
       const [coat, ears] = pick(DOG_COATS, walker.look >> 3);
