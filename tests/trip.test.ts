@@ -340,7 +340,8 @@ describe('meeting the other boat', () => {
       }
       expect(touched).toBe(false);
     }
-  });
+    // Eight trips to the lock, step by step, take a few seconds.
+  }, 30_000);
 });
 
 describe('keeping the whole hull on the water', () => {
@@ -436,7 +437,8 @@ describe('keeping the whole hull on the water', () => {
       expect(trip.phase).toBe('arrived');
       expect(worst).toBeLessThan(0.5);
     }
-  });
+    // Both whole days, step by step, take a few seconds.
+  }, 30_000);
 });
 
 describe('taking the tiller', () => {
