@@ -109,11 +109,18 @@ export function planTrip(stretch: Stretch, way: Way = stretch.ways[0]): TripPlan
   }
   const names = new Map(data.waterways.map((w) => [w.id, w.name]));
   const legs = [{ from: 0, name: names.get(way.follows[0]) ?? '' }];
-  const junctions: RouteJunction[] = way.junctions.map((j) => {
-    if (!j.turns) return { name: j.name, s: j.s, onto: legs[legs.length - 1].name, turn: 'straight' };
+  const junctions: RouteJunction[] = [];
+  for (const j of way.junctions) {
+    // Two branches leave a three-way junction together, and the route takes one of them or neither.
+    const together = way.junctions.filter((k) => k.name === j.name);
+    if (j !== (together.find((k) => k.turns) ?? together[0])) continue;
+    if (!j.turns) {
+      junctions.push({ name: j.name, s: j.s, onto: legs[legs.length - 1].name, turn: 'straight' });
+      continue;
+    }
     legs.push({ from: j.s, name: j.branch.name });
-    return { name: j.name, s: j.s, onto: j.branch.name, turn: headingAt(route, j.s + 120) > headingAt(route, j.s - 120) ? 'right' : 'left' };
-  });
+    junctions.push({ name: j.name, s: j.s, onto: j.branch.name, turn: headingAt(route, j.s + 120) > headingAt(route, j.s - 120) ? 'right' : 'left' });
+  }
   // Moorings count as reached where the moored boats begin.
   const placeAt = (f: FeatureData, s: number) => (f.kind === 'moorings' ? (moorings.find((m) => m.name === f.name)?.from ?? s) : s);
   const places = [...way.onRoute.map(({ feature, s }) => ({ name: feature.name, s: placeAt(feature, s) })), ...junctions.map((j) => ({ name: j.name, s: j.s }))].sort((a, b) => a.s - b.s);
@@ -175,6 +182,8 @@ export interface TripOptions {
   readonly other?: OtherWay | null;
   readonly crewed?: boolean;
   readonly hold?: number | null;
+  /** Locks on other ways the day might go, besides this way's own, so each keeps its state whichever way the boat takes. */
+  readonly locks?: readonly RouteLock[];
 }
 
 export type TripEvent =
@@ -192,7 +201,7 @@ export type TripEvent =
 
 export function newTrip(plan: TripPlan, options: TripOptions = {}): Trip {
   const other = plan.other && options.other ? newOtherBoat(options.other) : null;
-  const locks = new Map(plan.locks.map((l) => [l.id, newLock(0)]));
+  const locks = new Map([...plan.locks, ...(options.locks ?? [])].map((l) => [l.id, newLock(0)]));
   if (other && plan.other) locks.set(plan.other.lock.id, newLock(lockWaterFor(other.way)));
   return {
     time: 0,

@@ -797,6 +797,10 @@ button:focus-visible {
   stroke: #2f6b4a;
 }
 
+.way-2 .way-line {
+  stroke: #8a4a2c;
+}
+
 .way-choice:hover .way-line {
   stroke-opacity: 0.7;
 }
@@ -808,6 +812,10 @@ button:focus-visible {
 
 .way-1 .map-label.choice-label {
   fill: #2f6b4a;
+}
+
+.way-2 .map-label.choice-label {
+  fill: #8a4a2c;
 }
 
 .spot-mark {

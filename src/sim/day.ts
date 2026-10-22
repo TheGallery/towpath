@@ -1,8 +1,9 @@
 // One day on the canal, morning to morning. The boat is moored at dawn and
 // calls you to cast off. It cruises by itself and calls you when it needs you:
-// at the lock, before the junction to choose a way, and at dusk when it reaches
-// the mooring at the end of that way, to choose a spot to tie up. If you don't
-// come, it waits. Once it's tied up, evening falls, then night, then morning.
+// at each lock, before each junction where the ways still open part, to choose
+// one, and at dusk when it reaches the mooring at the end of the way you've
+// chosen, to choose a spot to tie up. If you don't come, it waits. Once it's
+// tied up, evening falls, then night, then morning.
 
 import { clamp, lerp, smoothstep } from '../core/math';
 import { poseAt } from '../core/track';
@@ -14,7 +15,7 @@ import { newLogbook, noteEvents } from './logbook';
 import type { Logbook } from './logbook';
 import type { OtherWay } from './otherboat';
 import { NO_CONTROLS, castOff, lockForYou, newTrip, planTrip, stepTrip, switchWay } from './trip';
-import type { Controls, Trip, TripEvent, TripPlan } from './trip';
+import type { Controls, RouteLock, Trip, TripEvent, TripPlan } from './trip';
 
 export type DayPhase = 'morning' | 'underway' | 'dusk' | 'tying-up' | 'evening' | 'night' | 'dawn' | 'over';
 
@@ -22,32 +23,52 @@ export type DayPhase = 'morning' | 'underway' | 'dusk' | 'tying-up' | 'evening' 
 export const EVENING_TIME = 60;
 export const NIGHT_TIME = 100;
 export const DAWN_TIME = 30;
-/** How far before the junction the boat waits for you to choose a way. */
+/** How far before a junction the boat waits for you to choose a way. */
 export const HOLD_GAP = 230;
 /** How far before it waits the junction call rings, about 75 seconds at cruising speed. */
 export const CALL_AHEAD = 490;
 /** How far from the mooring the light begins to go. */
 export const DUSK_FROM = 1100;
 
-/** Where the ways part: the junction, and where along the shared route the call rings and the boat waits. */
+export interface DayPlan {
+  /** The trip along each way the day can go. The boat follows the first until you choose. */
+  readonly ways: readonly TripPlan[];
+  /** Every lock on any of the ways, once each. */
+  readonly locks: readonly RouteLock[];
+}
+
+export function planDay(stretch: Stretch): DayPlan {
+  const ways = stretch.ways.map((w) => planTrip(stretch, w));
+  const locks = new Map(ways.flatMap((w) => w.locks.map((l) => [l.id, l] as const)));
+  return { ways, locks: [...locks.values()] };
+}
+
+/**
+ * Where the ways still open part next: the junction, where along the boat's
+ * route the call rings and the boat waits, and the choices, each the ways
+ * that go on together the same way from there.
+ */
 export interface Fork {
   readonly name: string;
   readonly s: number;
   readonly ring: number;
   readonly hold: number;
+  readonly options: readonly (readonly TripPlan[])[];
 }
 
-export interface DayPlan {
-  /** The trip along each way the day can go. The boat follows the first until you choose. */
-  readonly ways: readonly TripPlan[];
-  readonly fork: Fork | null;
-}
-
-export function planDay(stretch: Stretch): DayPlan {
-  const ways = stretch.ways.map((w) => planTrip(stretch, w));
-  // The first junction where the ways don't all go the same way.
-  const fork = ways[0].junctions.find((j) => ways.some((w) => w.junctions.find((k) => k.name === j.name)?.turn !== j.turn));
-  return { ways, fork: fork && ways.length > 1 ? { name: fork.name, s: fork.s, hold: fork.s - HOLD_GAP, ring: fork.s - HOLD_GAP - CALL_AHEAD } : null };
+/** The next junction where the ways the day can still go part, if they do. */
+export function forkAhead(day: Pick<Day, 'ways' | 'plan'>, plan: DayPlan): Fork | null {
+  const open = plan.ways.filter((w) => day.ways.includes(w.way));
+  if (open.length < 2) return null;
+  for (const j of day.plan.junctions) {
+    const options = new Map<string, TripPlan[]>();
+    for (const w of open) {
+      const onto = w.junctions.find((k) => k.name === j.name)?.onto ?? '';
+      options.set(onto, [...(options.get(onto) ?? []), w]);
+    }
+    if (options.size > 1) return { name: j.name, s: j.s, hold: j.s - HOLD_GAP, ring: j.s - HOLD_GAP - CALL_AHEAD, options: [...options.values()] };
+  }
+  return null;
 }
 
 /** A pose on the water: where the boat is, and which way it points. */
@@ -74,13 +95,13 @@ export interface Day {
   phase: DayPhase;
   /** Seconds since the phase began. */
   phaseTime: number;
-  /** The trip the boat is following: the first way until you choose. */
+  /** The trip the boat is following: the first way still open until you've chosen one. */
   plan: TripPlan;
-  /** True once you've chosen a way at the fork, or if there's no fork. */
-  chosen: boolean;
+  /** The ways the day can still go, by id: all of them at first, then only those down each way you choose. */
+  ways: readonly string[];
   trip: Trip;
   calls: CallBook;
-  /** True once the boat has stopped before the junction to wait for you. */
+  /** True once the boat has stopped before the next junction to wait for you. */
   held: boolean;
   spot: Spot | null;
   glide: Glide | null;
@@ -99,30 +120,38 @@ export interface DayOptions {
 export type DayEvent =
   | TripEvent
   /** A call rings, or rings again because you haven't come. */
-  | { readonly kind: 'call'; readonly call: CallKind; readonly again: boolean }
-  | { readonly kind: 'answered'; readonly call: CallKind }
+  | { readonly kind: 'call'; readonly call: CallKind; readonly place?: string; readonly again: boolean }
+  | { readonly kind: 'answered'; readonly call: CallKind; readonly place?: string }
   | { readonly kind: 'phase'; readonly phase: DayPhase }
-  /** The boat has stopped before the junction, waiting for you to choose. */
-  | { readonly kind: 'held' }
+  /** The boat has stopped before a junction, waiting for you to choose. */
+  | { readonly kind: 'held'; readonly junction: string }
   | { readonly kind: 'chose-way'; readonly way: string; readonly junction: string }
   | { readonly kind: 'tied-up'; readonly spot: string };
 
 export function newDay(plan: DayPlan, options: DayOptions = {}): Day {
   const first = plan.ways[0];
-  return {
+  const day: Day = {
     number: options.number ?? 1,
     time: 0,
     phase: 'morning',
     phaseTime: 0,
     plan: first,
-    chosen: plan.fork === null,
-    trip: newTrip(first, { other: options.other, crewed: options.crewed, hold: plan.fork?.hold ?? null }),
+    ways: plan.ways.map((w) => w.way),
+    trip: newTrip(first, { other: options.other, crewed: options.crewed, locks: plan.locks }),
     calls: newCallBook(),
     held: false,
     spot: null,
     glide: null,
     log: newLogbook(),
   };
+  waitAtFork(day, plan);
+  return day;
+}
+
+/** Tells the boat to wait before the next junction where the ways part, if there is one. Where that's already behind it, it waits where it is. */
+function waitAtFork(day: Day, plan: DayPlan): void {
+  const fork = forkAhead(day, plan);
+  day.trip.hold = fork ? Math.max(fork.hold, day.trip.boat.s) : null;
 }
 
 /** Notes what happened in the day's logbook, and passes the events on. */
@@ -137,8 +166,8 @@ function enter(day: Day, phase: DayPhase, events: DayEvent[]): void {
   events.push({ kind: 'phase', phase });
 }
 
-function answered(day: Day, kind: CallKind, events: DayEvent[]): void {
-  if (answer(day.calls, kind)) events.push({ kind: 'answered', call: kind });
+function answered(day: Day, kind: CallKind, events: DayEvent[], place?: string): void {
+  if (answer(day.calls, kind, place)) events.push(place === undefined ? { kind: 'answered', call: kind } : { kind: 'answered', call: kind, place });
 }
 
 export function castOffDay(day: Day): DayEvent[] {
@@ -152,26 +181,34 @@ export function castOffDay(day: Day): DayEvent[] {
 /** You've come to the lock: its call is answered. */
 export function answerLock(day: Day): DayEvent[] {
   const events: DayEvent[] = [];
-  if (lockForYou(day.trip)) answered(day, 'lock', events);
+  const yours = lockForYou(day.trip);
+  if (yours) answered(day, 'lock', events, yours.lock.id);
   return noted(day, events);
 }
 
-/** True while you can still choose a way: the boat hasn't reached the junction. */
+/** True while you can still choose a way at the next fork: the boat hasn't reached its junction. */
 export function canChooseWay(day: Day, plan: DayPlan): boolean {
-  return !day.chosen && plan.fork !== null && day.phase === 'underway' && day.trip.boat.s <= plan.fork.hold + 1;
+  return forkAhead(day, plan) !== null && day.phase === 'underway' && day.trip.hold !== null && day.trip.boat.s <= day.trip.hold + 1;
 }
 
-/** Choose which way to go at the junction, by its id. The boat carries on along it. */
+/**
+ * Choose which way to go at the next fork, by the id of a way down it. The
+ * boat carries on along it, and the day can now go only the ways down it,
+ * waiting again before the next junction where those part.
+ */
 export function chooseWay(day: Day, plan: DayPlan, way: string): DayEvent[] {
-  const next = plan.ways.find((w) => w.way === way);
-  if (!next || !plan.fork || !canChooseWay(day, plan)) return [];
+  const fork = forkAhead(day, plan);
+  const option = fork?.options.find((o) => o.some((w) => w.way === way));
+  const next = option?.find((w) => w.way === way);
+  if (!fork || !option || !next || !canChooseWay(day, plan)) return [];
   const events: DayEvent[] = [];
-  switchWay(day.trip, day.plan, next);
+  if (next !== day.plan) switchWay(day.trip, day.plan, next);
   day.plan = next;
-  day.chosen = true;
-  day.trip.hold = null;
-  events.push({ kind: 'chose-way', way, junction: plan.fork.name });
-  answered(day, 'junction', events);
+  day.ways = option.map((w) => w.way);
+  day.held = false;
+  waitAtFork(day, plan);
+  events.push({ kind: 'chose-way', way, junction: fork.name });
+  answered(day, 'junction', events, fork.name);
   return noted(day, events);
 }
 
@@ -243,27 +280,27 @@ export function stepDay(day: Day, plan: DayPlan, controls: Controls, dt: number)
   const events: DayEvent[] = [];
   day.time += dt;
   day.phaseTime += dt;
-  const ringing = (kind: CallKind) => {
-    if (ring(day.calls, kind, day.time)) events.push({ kind: 'call', call: kind, again: false });
+  const ringing = (kind: CallKind, place?: string) => {
+    if (ring(day.calls, kind, day.time, place)) events.push(place === undefined ? { kind: 'call', call: kind, again: false } : { kind: 'call', call: kind, place, again: false });
   };
 
   for (const e of stepTrip(day.trip, day.plan, controls, dt)) {
     events.push(e);
-    if (e.kind === 'lock-yours' && !day.trip.crewed) ringing('lock');
+    if (e.kind === 'lock-yours' && !day.trip.crewed) ringing('lock', e.lock);
     if (e.kind === 'arrived') {
       enter(day, 'dusk', events);
       ringing('dusk');
     }
   }
 
-  const fork = plan.fork;
+  const fork = forkAhead(day, plan);
   if (day.phase === 'morning') ringing('cast-off');
-  if (fork && !day.chosen && day.phase === 'underway') {
+  if (fork && day.phase === 'underway') {
     const { boat } = day.trip;
-    if (boat.s >= fork.ring) ringing('junction');
-    if (!day.held && boat.s >= fork.hold - 0.6 && Math.abs(boat.v) < 0.3) {
+    if (boat.s >= fork.ring) ringing('junction', fork.name);
+    if (!day.held && boat.s >= (day.trip.hold ?? fork.hold) - 0.6 && Math.abs(boat.v) < 0.3) {
       day.held = true;
-      events.push({ kind: 'held' });
+      events.push({ kind: 'held', junction: fork.name });
     }
   }
 
@@ -278,7 +315,7 @@ export function stepDay(day: Day, plan: DayPlan, controls: Controls, dt: number)
   else if (day.phase === 'dawn' && day.phaseTime >= DAWN_TIME) enter(day, 'over', events);
 
   const open = day.calls.open;
-  if (open && remind(day.calls, day.time)) events.push({ kind: 'call', call: open.kind, again: true });
+  if (open && remind(day.calls, day.time)) events.push(open.place === undefined ? { kind: 'call', call: open.kind, again: true } : { kind: 'call', call: open.kind, place: open.place, again: true });
   return noted(day, events);
 }
 
@@ -318,7 +355,7 @@ export function lightAt(day: Day): Light {
       // The morning glow fades as the boat sets out, and the light goes as it nears the mooring.
       const morning = mixLight(MORNING, DAY, smoothstep(0, 90, day.phaseTime));
       const remaining = day.plan.end - day.trip.boat.s;
-      return mixLight(morning, DUSK, day.chosen ? smoothstep(DUSK_FROM, 0, remaining) : 0);
+      return mixLight(morning, DUSK, day.ways.length === 1 ? smoothstep(DUSK_FROM, 0, remaining) : 0);
     }
     case 'dusk':
     case 'tying-up':
@@ -333,13 +370,13 @@ export function lightAt(day: Day): Light {
 }
 
 /** When each call rang, and when the day ended, with the locks worked for you and every call answered at once: for timing the day. */
-export function dayTimeline(plan: DayPlan, way: string, other: OtherWay | null = 'down', step = 0.25): { calls: { call: CallKind; at: number }[]; end: number } {
+export function dayTimeline(plan: DayPlan, way: string, other: OtherWay | null = 'down', step = 0.25): { calls: { call: CallKind; place?: string; at: number }[]; end: number } {
   const day = newDay(plan, { other, crewed: true });
-  const calls: { call: CallKind; at: number }[] = [];
+  const calls: { call: CallKind; place?: string; at: number }[] = [];
   while (day.phase !== 'over' && day.time < 4 * 60 * 60) {
     for (const e of stepDay(day, plan, NO_CONTROLS, step)) {
       if (e.kind !== 'call' || e.again) continue;
-      calls.push({ call: e.call, at: day.time });
+      calls.push(e.place === undefined ? { call: e.call, at: day.time } : { call: e.call, place: e.place, at: day.time });
       if (e.call === 'cast-off') castOffDay(day);
       if (e.call === 'junction') chooseWay(day, plan, way);
       if (e.call === 'dusk') chooseSpot(day, 0);

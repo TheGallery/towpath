@@ -5,12 +5,12 @@ import { paintScenery } from './render/scenery';
 import { Scene } from './render/scene';
 import type { Focus, WayChoice } from './render/scene';
 import { waitedFor } from './sim/calls';
-import { answerLock, boatPose, canChooseWay, castOffDay, chooseSpot, chooseWay, dayTimeline, eveningBegan, lightAt, needsYou, newDay, planDay, stepDay } from './sim/day';
-import type { DayEvent } from './sim/day';
+import { answerLock, boatPose, canChooseWay, castOffDay, chooseSpot, chooseWay, dayTimeline, eveningBegan, forkAhead, lightAt, needsYou, newDay, planDay, stepDay } from './sim/day';
+import type { DayEvent, Fork } from './sim/day';
 import { logLines } from './sim/logbook';
 import type { OtherWay } from './sim/otherboat';
 import { loadGame, saveGame } from './sim/save';
-import { PART_NAMES, callTitle, describeDay, upcoming, waitedWords, wayWords } from './sim/status';
+import { PART_NAMES, callTitle, describeDay, forkWords, upcoming, waitedWords, wayWords } from './sim/status';
 import { NO_CONTROLS, boatsAt, lockForYou, steersItselfHere, wantsPart } from './sim/trip';
 import type { TripPlan } from './sim/trip';
 import { planWalkers } from './sim/walkers';
@@ -71,7 +71,6 @@ function readKept(): string | null {
 
 const stretch = resolveStretch(HALLAM);
 const dayPlan = planDay(stretch);
-const fork = dayPlan.fork;
 const runs = towpathRuns(stretch);
 const walkers = planWalkers(runs, HALLAM.seed);
 const askedWay = readOtherWay(window.location.search);
@@ -123,14 +122,30 @@ const closeup = new Closeup(closeupRoot, () => {
 });
 let lastView: View | null = null;
 
-/** Today's route on the map, as far as it's decided, and the ways to choose from until it is. */
+/** The next junction where the ways part, while there's one to choose at, and its question, made once so the panel can tell when it changes. */
+let fork: Fork | null = null;
+let wayChoice: Choice | null = null;
+
+/** Today's route on the map, as far as it's decided, and the ways to choose from at the next fork, each as far as it goes before it parts again. */
 function showRoute(): void {
-  const choosing = fork && !day.chosen;
-  scene.showRoute(day.plan.route, choosing ? fork.s : day.plan.end);
-  const choices: WayChoice[] | null = choosing ? dayPlan.ways.map((w, i) => ({ id: w.way, route: w.route, from: fork.s, to: w.end, label: String(i + 1) })) : null;
+  fork = forkAhead(day, dayPlan);
+  scene.showRoute(day.plan.route, fork ? fork.s : day.plan.end);
+  const at = fork;
+  const choices: WayChoice[] | null = at
+    ? at.options.map((o, i) => ({ id: o[0].way, route: o[0].route, from: at.s, to: forkAhead({ ways: o.map((w) => w.way), plan: o[0] }, dayPlan)?.s ?? o[0].end, label: String(i + 1) }))
+    : null;
   scene.showChoices(choices);
+  wayChoice = at
+    ? {
+        title: `Which way at ${at.name}?`,
+        options: at.options.map((o) => {
+          const words = forkWords(at, o, dayPlan);
+          return { label: words.way, detail: words.to };
+        }),
+        onPick: (i) => pickWay(at.options[i][0].way),
+      }
+    : null;
 }
-showRoute();
 
 /** Goes to the part of the lock that needs you and opens its close-up, or, in a close-up, does the next thing. */
 function workLock(): void {
@@ -161,20 +176,11 @@ function pickSpot(index: number): void {
   askingSpot = false;
 }
 
-/** The question for each way's mooring, and for the junction, made once so the panel can tell when it changes. */
+/** The question for each way's mooring, made once so the panel can tell when it changes. */
 const spotChoices = new Map<TripPlan, Choice>(
   dayPlan.ways.map((w) => [w, { title: `Where will you moor at ${w.endName}?`, options: w.spots.map((s) => ({ label: s.name })), onPick: (i) => pickSpot(i) }]),
 );
-const wayChoice: Choice | null = fork
-  ? {
-      title: `Which way at ${fork.name}?`,
-      options: dayPlan.ways.map((w) => {
-        const words = wayWords(w, fork.name);
-        return { label: words.way, detail: words.to };
-      }),
-      onPick: (i) => pickWay(dayPlan.ways[i].way),
-    }
-  : null;
+showRoute();
 
 /** The choice the boat is waiting on, while you're looking at it: the ways on the map, or the spots at dusk. */
 function currentChoice(): Choice | null {
@@ -196,8 +202,8 @@ function answerCall(): void {
 function choose(number: number): void {
   const need = needsYou(day, dayPlan);
   if (need === 'way') {
-    const way = dayPlan.ways[number - 1];
-    if (way) pickWay(way.way);
+    const option = fork?.options[number - 1];
+    if (option) pickWay(option[0].way);
   } else if (need === 'spot' && number <= day.plan.spots.length) pickSpot(number - 1);
 }
 
@@ -272,13 +278,14 @@ function handle(events: readonly DayEvent[]): void {
       // A reminder rings only if you're not looking at the game.
       if (!e.again || document.hidden || !document.hasFocus()) ring = true;
       if (e.again) continue;
-      if (e.call === 'junction' && fork) hud.toast(`${fork.name} is coming up. Which way will you go? Press Space to choose on the map.`);
+      if (e.call === 'junction') hud.toast(`${e.place ?? 'The junction'} is coming up. Which way will you go? Press Space to choose on the map.`);
       else if (e.call === 'dusk') hud.toast(`The light is going. Choose a spot to moor for the night at ${day.plan.endName}.`);
-    } else if (e.kind === 'held' && fork) {
-      hud.toast(`The boat waits before ${fork.name} until you choose a way.`);
-    } else if (e.kind === 'chose-way' && fork) {
-      const words = wayWords(day.plan, fork.name);
-      hud.toast(`${words.way}, ${words.to}.`);
+    } else if (e.kind === 'held') {
+      hud.toast(`The boat waits before ${e.junction} until you choose a way.`);
+    } else if (e.kind === 'chose-way') {
+      const words = wayWords(day.plan, e.junction);
+      const next = forkAhead(day, dayPlan);
+      hud.toast(next ? `${words.way}, on to ${next.name}, where you'll choose again.` : `${words.way}, ${words.to}.`);
     } else if (e.kind === 'tied-up') {
       hud.toast(`Tied up ${inSentence(e.spot)} for the night.`);
     } else if (e.kind === 'phase' && e.phase === 'evening') {

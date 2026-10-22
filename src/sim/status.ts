@@ -3,7 +3,8 @@
 
 import { CRUISE_SPEED } from './boat';
 import type { CallKind } from './calls';
-import type { Day, DayPlan } from './day';
+import { forkAhead } from './day';
+import type { Day, DayPlan, Fork } from './day';
 import { CHAMBER_HALF } from './lock';
 import type { Job, Part, Where } from './lock';
 import { lockForYou, steersItselfHere } from './trip';
@@ -97,9 +98,11 @@ export function describeDay(day: Day, plan: DayPlan): string {
   switch (day.phase) {
     case 'morning':
       return `Morning at ${p.startName}. Cast off when you're ready.`;
-    case 'underway':
-      if (plan.fork && !day.chosen && trip.passage === null && trip.boat.s >= plan.fork.hold - 2) return `Waiting before ${plan.fork.name} for you to choose a way.`;
+    case 'underway': {
+      const fork = forkAhead(day, plan);
+      if (fork && trip.passage === null && trip.hold !== null && trip.boat.s >= trip.hold - 2) return `Waiting before ${fork.name} for you to choose a way.`;
       return describe(trip, p);
+    }
     case 'dusk':
       return `The light is going. Choose where to moor at ${p.endName}.`;
     case 'tying-up':
@@ -123,7 +126,7 @@ export function callTitle(kind: CallKind, day: Day, plan: DayPlan): string {
     case 'lock':
       return `Waiting at ${day.trip.passage?.lock.name ?? 'the lock'}`;
     case 'junction':
-      return `Which way at ${plan.fork?.name ?? 'the junction'}?`;
+      return `Which way at ${forkAhead(day, plan)?.name ?? 'the junction'}?`;
     case 'dusk':
       return 'Time to moor';
   }
@@ -134,6 +137,30 @@ export function wayWords(trip: TripPlan, junction: string): { readonly way: stri
   const j: RouteJunction | undefined = trip.junctions.find((k) => k.name === junction);
   const way = !j ? `Along the ${trip.legs[0].name}` : j.turn === 'straight' ? `Straight on along the ${j.onto}` : `Turn ${j.turn} into the ${j.onto}`;
   return { way, to: `to ${trip.endName}, ${trip.endAbout}` };
+}
+
+const NUMBERS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
+const aboutMinutes = (distance: number): string => `about ${Math.max(1, Math.round(distance / CRUISE_SPEED / 60))} min`;
+
+/**
+ * What's down one of the ways at a fork, the ways that go on together from its
+ * junction: which way it goes, and where it leads, how far, and how many locks.
+ * "Turn right into the Wendle Arm", "to Wendle Basin, by The Navigation pub,
+ * about 3 min with no locks", or for ways that part again, "to Mill Basin or
+ * Hob Hill bank, choosing again at Bramble Junction, about 6 min on".
+ */
+export function forkWords(fork: Fork, option: readonly TripPlan[], plan: DayPlan): { readonly way: string; readonly to: string } {
+  const [first] = option;
+  const { way } = wayWords(first, fork.name);
+  if (option.length === 1) {
+    const locks = first.locks.filter((l) => l.s > fork.s).length;
+    const lockWords = locks === 0 ? 'with no locks' : `and ${NUMBERS[locks] ?? locks} lock${locks === 1 ? '' : 's'}`;
+    return { way, to: `to ${first.endName}, ${first.endAbout}, ${aboutMinutes(first.end - fork.s)} ${lockWords}` };
+  }
+  const ends = [...new Set(option.map((w) => w.endName))];
+  const names = ends.length > 1 ? `${ends.slice(0, -1).join(', ')} or ${ends[ends.length - 1]}` : ends[0];
+  const next = forkAhead({ ways: option.map((w) => w.way), plan: first }, plan);
+  return { way, to: next ? `to ${names}, choosing again at ${next.name}, ${aboutMinutes(next.s - fork.s)} on` : `to ${names}` };
 }
 
 /** How long the boat has waited for you, when it's long enough to mention. */

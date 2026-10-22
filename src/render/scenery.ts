@@ -7,6 +7,7 @@ import { clamp, lerp, seededRandom } from '../core/math';
 import { distanceTo, nearestDistance, poseAt } from '../core/track';
 import type { Point, Pose, Track } from '../core/track';
 import { BASIN_CORNER, BRIDGE_DECK, CANAL_WIDTH, MOORED_OFFSET, TOWPATH_OFFSET } from '../world/dimensions';
+import { towpathSide } from '../world/stretch';
 import type { FeatureData, LockData, Stretch } from '../world/stretch';
 import { towpathRuns } from '../world/towpath';
 import type { Grazer } from '../sim/wildlife';
@@ -280,21 +281,23 @@ export function paintScenery(stretch: Stretch): Scenery {
         lamps.push(b.at);
       }
     } else if (f.kind === 'bank') {
-      // Mooring rings along the edge of the towpath, a bench, and a short mown verge.
+      // Mooring rings along the edge of the towpath, a bench, and a short mown verge, on whichever bank the towpath runs.
       const track = trackOf(stretch, f);
+      const waterway = stretch.data.waterways.find((w) => w.id === f.waterway);
+      const side = waterway ? towpathSide(stretch.waterways, waterway) : 1;
       const ats = f.spots.map((sp) => sp.at);
       const from = Math.min(f.at, ...ats) - 20;
       const to = Math.max(...ats) + 50;
-      base.push(tag('path', { d: offsetPath(track, TOWPATH_OFFSET + 14, from, to), stroke: '#b4d48a', 'stroke-width': 12, fill: 'none', 'stroke-linecap': 'round' }));
+      base.push(tag('path', { d: offsetPath(track, side * (TOWPATH_OFFSET + 14), from, to), stroke: '#b4d48a', 'stroke-width': 12, fill: 'none', 'stroke-linecap': 'round' }));
       for (const at of ats) {
         for (const end of [-28, 28]) {
-          const p = poseAt(track, at + end, TOWPATH_OFFSET - 6);
+          const p = poseAt(track, at + end, side * (TOWPATH_OFFSET - 6));
           base.push(tag('circle', { cx: f1(p.x), cy: f1(p.y), r: 2.6, fill: 'none', stroke: '#3b3b3b', 'stroke-width': 1.4 }));
         }
       }
-      const bench = poseAt(track, ats[Math.floor(ats.length / 2)], TOWPATH_OFFSET + 15);
+      const bench = poseAt(track, ats[Math.floor(ats.length / 2)], side * (TOWPATH_OFFSET + 15));
       base.push(placed(bench, tag('rect', { x: -9, y: -3, width: 18, height: 6, rx: 1, fill: '#8b5a2b', stroke: '#5e3c1c', 'stroke-width': 1 })));
-      map.push(tag('path', { d: offsetPath(track, MOORED_OFFSET + 10, from + 20, to - 20), stroke: MAP_COLOURS.moorings, 'stroke-width': 12, fill: 'none', 'stroke-dasharray': '10 8' }));
+      map.push(tag('path', { d: offsetPath(track, side * (MOORED_OFFSET + 10), from + 20, to - 20), stroke: MAP_COLOURS.moorings, 'stroke-width': 12, fill: 'none', 'stroke-dasharray': '10 8' }));
     }
   }
 

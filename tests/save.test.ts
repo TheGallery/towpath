@@ -115,6 +115,42 @@ describe('keeping your place', () => {
   });
 });
 
+/** A day kept as version 1 kept it, when calls went by their kind alone and a day had one fork. */
+function versionOne(day: Day): string {
+  const s = JSON.parse(saveGame(keep(day), HALLAM));
+  const bare = (key: string) => key.split(':')[0];
+  s.version = 1;
+  s.day.chosen = s.day.ways.length === 1;
+  delete s.day.ways;
+  if (s.day.calls.open) delete s.day.calls.open.place;
+  s.day.calls.answered = s.day.calls.answered.map(bare);
+  for (const times of [s.day.log.waiting, s.day.log.waited]) {
+    for (const [key, t] of Object.entries(times)) {
+      delete times[key];
+      times[bare(key)] = t;
+    }
+  }
+  return JSON.stringify(s);
+}
+
+describe('a kept place from the version before', () => {
+  it.each(MOMENTS)('reads back as it would be kept now: %s', (_, day) => {
+    const kept = loadGame(versionOne(day), plan, HALLAM);
+    expect(kept?.day).toEqual(day);
+  });
+
+  it('reads the junction waited at and the way chosen, before and after choosing', () => {
+    const day = newDay(plan, { other: 'down', crewed: true });
+    castOffDay(day);
+    while (!day.held) stepDay(day, plan, NO_CONTROLS, 0.25);
+    expect(day.calls.open).toMatchObject({ kind: 'junction', place: 'Wendle Junction' });
+    expect(loadGame(versionOne(day), plan, HALLAM)?.day).toEqual(day);
+    chooseWay(day, plan, 'main');
+    expect(day.ways).toEqual(['main']);
+    expect(loadGame(versionOne(day), plan, HALLAM)?.day).toEqual(day);
+  });
+});
+
 describe('a kept place that is stale or broken', () => {
   const day = MOMENTS[2][1];
   const good = JSON.parse(saveGame(keep(day), HALLAM));
@@ -125,7 +161,7 @@ describe('a kept place that is stale or broken', () => {
   });
 
   it('is set aside when it is from another version', () => {
-    for (const version of [SAVE_VERSION - 1, SAVE_VERSION + 1, String(SAVE_VERSION), undefined, null]) {
+    for (const version of [0, SAVE_VERSION + 1, String(SAVE_VERSION), undefined, null]) {
       expect(loadGame(JSON.stringify({ ...good, version }), plan, HALLAM)).toBeNull();
     }
   });
@@ -158,6 +194,11 @@ describe('a kept place that is stale or broken', () => {
       (s) => (s.day.trip.passage.lock = 'another-lock'),
       (s) => (s.day.trip.passage = null),
       (s) => (s.day.calls.answered = ['cast-off', 'tea']),
+      (s) => (s.day.calls.answered = ['tea:brook-lock']),
+      (s) => (s.day.ways = ['nowhere']),
+      (s) => (s.day.ways = ['main']),
+      (s) => delete s.day.ways,
+      (s) => (s.day.log.waited = { 'picnic:brook-lock': 5 }),
       (s) => (s.day.calls.open = { kind: 'lock' }),
       (s) => (s.day.log.entries = [{ kind: 'picnic', at: 3 }]),
       (s) => (s.day.log.entries[0].from = 4),
