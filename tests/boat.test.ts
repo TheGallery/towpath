@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildTrack } from '../src/core/track';
-import { CRUISE_SPEED, hullSpan, moveBoat } from '../src/sim/boat';
-import type { Boat, Helm } from '../src/sim/boat';
+import { CRUISE_SPEED, hullSpan, hullSpanWithin, moveBoat } from '../src/sim/boat';
+import type { Boat, Helm, Narrows } from '../src/sim/boat';
 import { CANAL_WIDTH, MOORED_OFFSET } from '../src/world/dimensions';
 
 const straight = buildTrack([[0, 0], [2000, 0], [4000, 0]]);
@@ -10,10 +10,11 @@ const boat = (over: Partial<Boat> = {}): Boat => ({ s: 100, d: 0, psi: 0, v: CRU
 const auto: Helm = { kind: 'auto', line: 0, speed: CRUISE_SPEED };
 const tiller = (rudder: number, speed = CRUISE_SPEED): Helm => ({ kind: 'tiller', rudder, speed });
 
-function run(b: Boat, track: typeof straight, helm: Helm, seconds: number, obstacles = [] as { s: number; d: number }[]) {
+function run(b: Boat, track: typeof straight, helm: Helm, seconds: number, obstacles = [] as { s: number; d: number }[], narrows: Narrows[] = [], each?: () => void) {
   const bumps: string[] = [];
   for (let t = 0; t < seconds; t += 1 / 30) {
-    const bump = moveBoat(b, track, helm, 1 / 30, obstacles);
+    const bump = moveBoat(b, track, helm, 1 / 30, obstacles, narrows);
+    each?.();
     if (bump) bumps.push(bump);
   }
   return bumps;
@@ -104,5 +105,60 @@ describe('bumps', () => {
     const bumps = run(b, straight, { kind: 'auto', line: -6, speed: CRUISE_SPEED }, 60, [{ s: 500, d: MOORED_OFFSET }]);
     expect(bumps).toEqual([]);
     expect(b.s).toBeGreaterThan(560);
+  });
+});
+
+describe('narrow water, as through a lock', () => {
+  const lock: Narrows = { from: 400, to: 644, half: 9 };
+  /** How far the hull reaches past the walls, while any of it is between them. */
+  const over = (b: Boat) => {
+    const span = hullSpanWithin(b, lock.from, lock.to);
+    return span ? Math.max(0, span.right - lock.half, -lock.half - span.left) : 0;
+  };
+
+  it('measures only the part of the hull between the walls', () => {
+    expect(hullSpanWithin(boat({ s: 300 }), lock.from, lock.to)).toBeNull();
+    const straightIn = hullSpanWithin(boat({ s: 500, d: 2 }), lock.from, lock.to);
+    expect(straightIn?.left).toBeCloseTo(-3, 9);
+    expect(straightIn?.right).toBeCloseTo(7, 9);
+    // Bow just in and turned across: only the bow's corner is between the walls.
+    const crooked = boat({ s: 370, d: 0, psi: 0.3 });
+    const bowIn = hullSpanWithin(crooked, lock.from, lock.to);
+    expect(bowIn?.right).toBeCloseTo(hullSpan(crooked).right, 9);
+    expect(bowIn?.left).toBeGreaterThan(hullSpan(crooked).left + 10);
+  });
+
+  it('keeps the whole hull between the walls when you steer into them, with soft bumps', () => {
+    for (const rudder of [-1, 1]) {
+      const b = boat({ s: 300, v: 3 });
+      let worst = 0;
+      const track = () => {
+        worst = Math.max(worst, over(b));
+      };
+      const bumps = run(b, straight, tiller(rudder, 3), 60, [], [lock], track);
+      run(b, straight, tiller(0, 3), 200, [], [lock], track);
+      expect(b.s).toBeGreaterThan(lock.to + 40);
+      expect(bumps).toContain('bank');
+      expect(worst).toBeLessThan(1e-9);
+    }
+  });
+
+  it('straightens a boat that comes at the mouth crooked, and lets it through', () => {
+    const b = boat({ s: 330, d: 10, psi: -0.35, v: 3 });
+    let worst = 0;
+    const bumps = run(b, straight, { kind: 'auto', line: 0, speed: 3 }, 200, [], [lock], () => {
+      worst = Math.max(worst, over(b));
+    });
+    expect(bumps).toEqual([]);
+    expect(b.s).toBeGreaterThan(lock.to + 40);
+    expect(worst).toBeLessThan(1e-9);
+  });
+
+  it('lines up sooner when told to look less far ahead', () => {
+    const near = boat({ d: 12 });
+    const far = boat({ d: 12 });
+    run(near, straight, { kind: 'auto', line: 0, speed: CRUISE_SPEED, lookAhead: 40 }, 12);
+    run(far, straight, { kind: 'auto', line: 0, speed: CRUISE_SPEED }, 12);
+    expect(Math.abs(near.d)).toBeLessThan(Math.abs(far.d));
   });
 });

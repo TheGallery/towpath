@@ -6,7 +6,7 @@
 import { clamp, lerp, seededRandom } from '../core/math';
 import { distanceTo, nearestDistance, poseAt } from '../core/track';
 import type { Point, Pose, Track } from '../core/track';
-import { BASIN_CORNER, BRIDGE_DECK, CANAL_WIDTH, MOORED_OFFSET, TOWPATH_OFFSET } from '../world/dimensions';
+import { BASIN_CORNER, BRIDGE_DECK, CANAL_WIDTH, LOCK_REACH, LOCK_WIDTH, MOORED_OFFSET, TOWPATH_OFFSET } from '../world/dimensions';
 import { towpathSide } from '../world/stretch';
 import type { FeatureData, LockData, Stretch } from '../world/stretch';
 import { towpathRuns } from '../world/towpath';
@@ -407,11 +407,11 @@ function placeHerds(stretch: Stretch, meadows: readonly (readonly [Point, Point,
 
 function lockStonework(): string {
   return [
-    tag('rect', { x: -122, y: -54, width: 244, height: 108, rx: 10, fill: COLOURS.coping, stroke: COLOURS.copingEdge, 'stroke-width': 2 }),
+    tag('rect', { x: -LOCK_REACH, y: -54, width: 2 * LOCK_REACH, height: 108, rx: 10, fill: COLOURS.coping, stroke: COLOURS.copingEdge, 'stroke-width': 2 }),
     ...[-90, -60, -30, 0, 30, 60, 90].map((x) => tag('path', { d: `M${x} -54V-14M${x} 14V54`, stroke: '#d5ccb8', 'stroke-width': 1.5 })),
-    tag('rect', { x: -122, y: -9, width: 244, height: 18, fill: '#7d7466' }),
-    tag('rect', { x: -122, y: -9, width: 50, height: 18, fill: COLOURS.water }),
-    tag('rect', { x: 72, y: -9, width: 50, height: 18, fill: COLOURS.water }),
+    tag('rect', { x: -LOCK_REACH, y: -LOCK_WIDTH / 2, width: 2 * LOCK_REACH, height: LOCK_WIDTH, fill: '#7d7466' }),
+    tag('rect', { x: -LOCK_REACH, y: -LOCK_WIDTH / 2, width: LOCK_REACH - 72, height: LOCK_WIDTH, fill: COLOURS.water }),
+    tag('rect', { x: 72, y: -LOCK_WIDTH / 2, width: LOCK_REACH - 72, height: LOCK_WIDTH, fill: COLOURS.water }),
     ...[[-86, -18], [-86, 18], [86, -18], [86, 18]].map(([x, y]) => tag('rect', { x: x - 3.5, y: y - 3.5, width: 7, height: 7, rx: 1, fill: '#2b2b2b' })),
   ].join('');
 }

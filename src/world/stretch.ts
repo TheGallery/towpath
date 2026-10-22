@@ -6,7 +6,7 @@
 import { clamp, lerp } from '../core/math';
 import { buildTrack, distanceTo, nearestDistance, poseAt } from '../core/track';
 import type { Point, Track } from '../core/track';
-import { BOAT_LENGTH, BRIDGE_DECK, CANAL_WIDTH, MOORED_OFFSET } from './dimensions';
+import { BOAT_BEAM, BOAT_LENGTH, BRIDGE_DECK, CANAL_WIDTH, LOCK_STRAIGHT, LOCK_WIDTH, MOORED_OFFSET } from './dimensions';
 
 export interface WaterwayData {
   readonly id: string;
@@ -298,21 +298,53 @@ function findWaterway(data: StretchData, id: string): WaterwayData {
   return found;
 }
 
-/** A way's points: along the first waterway, then into each branch where it leaves. */
-function routePoints(data: StretchData, way: WayData): Point[] {
+/** How far either side of a junction a route leaves the canals' centre lines, to round the corner into a branch. */
+const JUNCTION_ROUND = 60;
+
+/**
+ * Points round a corner, from `a` heading on from `before` to `b` heading on
+ * towards `after`, spaced like a curve's samples so the route through them
+ * stays smooth.
+ */
+function corner(before: Point, a: Point, b: Point, after: Point): Point[] {
+  const reach = Math.hypot(b[0] - a[0], b[1] - a[1]) / 3;
+  const unit = (p: Point, q: Point): Point => {
+    const l = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1;
+    return [(q[0] - p[0]) / l, (q[1] - p[1]) / l];
+  };
+  const [ua, ub] = [unit(before, a), unit(b, after)];
+  const c1: Point = [a[0] + ua[0] * reach, a[1] + ua[1] * reach];
+  const c2: Point = [b[0] - ub[0] * reach, b[1] - ub[1] * reach];
+  const n = Math.ceil((3 * reach) / 5);
+  return Array.from({ length: Math.max(0, n - 1) }, (_, i): Point => {
+    const t = (i + 1) / n;
+    const u = 1 - t;
+    return [u * u * u * a[0] + 3 * u * u * t * c1[0] + 3 * u * t * t * c2[0] + t * t * t * b[0], u * u * u * a[1] + 3 * u * u * t * c1[1] + 3 * u * t * t * c2[1] + t * t * t * b[1]];
+  });
+}
+
+/**
+ * A way's route: along each waterway's own curve, just as it's drawn, rounding
+ * the corner where it turns into a branch so it never swings out over the bank.
+ */
+function routeTrack(data: StretchData, curves: ReadonlyMap<string, Track>, way: WayData): Track {
   const [first, ...rest] = way.route.map((id) => findWaterway(data, id));
-  let points = waterwayCurve(data, first).points;
-  // Where the current waterway's own points begin in `points`.
-  let ownStart = first.leaves ? 1 : 0;
+  const curveOf = (w: WaterwayData): Track => curves.get(w.id) ?? curveTrack(data, w);
+  const start = curveOf(first);
+  let points = start.xs.map((x, i): Point => [x, start.ys[i]]);
   let parent = first;
   for (const branch of rest) {
     if (branch.leaves?.waterway !== parent.id) throw new Error(`${branch.id} does not leave ${parent.id}`);
-    const turn = ownStart + branch.leaves.atPoint;
-    points = [...points.slice(0, turn + 1), ...branch.points];
-    ownStart = turn + 1;
+    const curve = curveOf(branch);
+    // The junction is a point on both curves; the route leaves one a little before it and joins the other a little after.
+    const turn = points.findIndex((p) => Math.hypot(p[0] - curve.xs[0], p[1] - curve.ys[0]) < 1e-6);
+    let back = turn;
+    for (let gone = 0; back > 0 && gone < JUNCTION_ROUND; back--) gone += Math.hypot(points[back][0] - points[back - 1][0], points[back][1] - points[back - 1][1]);
+    const into = curve.ss.findIndex((s) => s >= JUNCTION_ROUND);
+    points = [...points.slice(0, back + 1), ...corner(points[back - 1], points[back], [curve.xs[into], curve.ys[into]], [curve.xs[into + 1], curve.ys[into + 1]]), ...curve.xs.slice(into).map((x, i): Point => [x, curve.ys[into + i]])];
     parent = branch;
   }
-  return points;
+  return buildTrack(points, 5);
 }
 
 /** Where a place on a waterway falls along a way, or null if the way doesn't pass it. */
@@ -378,8 +410,7 @@ export function resolveStretch(data: StretchData): Stretch {
   const roads = new Map(data.roads.map((r) => [r.id, buildTrack(roadPoints(data, waterways, r), 10)]));
 
   const ways = data.trip.ways.map((w): Way => {
-    const first = findWaterway(data, w.route[0]);
-    const route = buildTrack(routePoints(data, w), 5, waterwayCurve(data, first).before);
+    const route = routeTrack(data, waterways, w);
     const place = { follows: w.route, route };
 
     const onRoute: RouteFeature[] = [];
@@ -394,7 +425,8 @@ export function resolveStretch(data: StretchData): Stretch {
     for (const branch of data.waterways) {
       if (!branch.leaves || !w.route.includes(branch.leaves.waterway)) continue;
       const point = waterwayCurve(data, branch).points[0];
-      if (distanceTo(route, point) > ON_ROUTE) continue;
+      // A route rounds the corner where it turns, so it passes a little way inside the junction itself.
+      if (distanceTo(route, point) > JUNCTION_ROUND) continue;
       junctions.push({ name: branch.leaves.junction, point, s: nearestDistance(route, point), branch, turns: w.route.includes(branch.id) });
     }
     junctions.sort((a, b) => a.s - b.s);
@@ -443,6 +475,18 @@ export function checkStretch(data: StretchData): string[] {
       const canal = curves.get(f.waterway);
       const p = canal ? poseAt(canal, f.at) : null;
       if (road && p && distanceTo(buildTrack(road.points, 10), [p.x, p.y]) > ROAD_AT_BRIDGE) problems.push(`${f.id} isn't where ${f.road} crosses ${f.waterway}`);
+    }
+    // A lock is built straight, so its canal runs straight through it and past its landings, near enough that a boat lined up with the canal fits between its walls.
+    const canal = f.kind === 'lock' ? curves.get(f.waterway) : undefined;
+    if (canal) {
+      const c = poseAt(canal, f.at);
+      for (let x = -LOCK_STRAIGHT; x <= LOCK_STRAIGHT; x += 10) {
+        const p = poseAt(canal, f.at + x);
+        if (Math.abs((p.x - c.x) * c.nx + (p.y - c.y) * c.ny) > (LOCK_WIDTH - BOAT_BEAM) / 2) {
+          problems.push(`${f.id} isn't on a straight reach of ${f.waterway}`);
+          break;
+        }
+      }
     }
     if (f.kind === 'moorings') {
       const ats = f.boats.map((b) => b.at).sort((a, b) => a - b);
