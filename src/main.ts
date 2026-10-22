@@ -91,7 +91,7 @@ const askedWay = readOtherWay(window.location.search);
 let otherWay: OtherWay = kept?.other ?? askedWay ?? (Math.random() < 0.5 ? 'down' : 'up');
 let day = kept?.day ?? newDay(dayPlan, { other: otherWay });
 /** The earlier days' pages of the logbook, oldest first. */
-const pages: readonly DayPage[] = kept?.pages ?? [];
+let pages: readonly DayPage[] = kept?.pages ?? [];
 const askedWeather = readWeather(window.location.search);
 // Each day's weather comes from the seed and the day's number, so a kept day comes back with the same sky.
 let weather: Weather = planWeather(canal.data.seed, day.number, askedWeather);
@@ -156,11 +156,13 @@ function startCanal(number: number): void {
  * moored, made from the canal's seed, the day's number and that place, with
  * today's page kept in the logbook. It keeps the next morning as your place
  * and opens the game again from it. If it can't be kept, the next day starts
- * here on today's stretch instead, from where today began.
+ * here on today's stretch instead, from where today began, with today's page
+ * still kept in the logbook.
  */
 function carryOn(): void {
   otherWay = askedWay ?? (otherWay === 'down' ? 'up' : 'down');
   if (reopen(nextMorning({ canal, day, pages, other: otherWay, bell: bell.on }, stretch, otherWay))) return;
+  pages = [...pages, dayPage(canal, day)];
   day = newDay(dayPlan, { other: otherWay, number: day.number + 1 });
   weather = planWeather(canal.data.seed, day.number, askedWeather);
   logbook.close();
