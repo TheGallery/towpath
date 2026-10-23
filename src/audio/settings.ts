@@ -1,7 +1,8 @@
 // How you've set the sound: whether it's on at all, how loud, and which of its
 // two groups you hear, the boat and its locks, and nature. It's kept in the
 // browser under its own key, apart from your place in the game, so the kept
-// place's format doesn't change, and a broken or missing setting gives the
+// place's format doesn't change. Your choice is remembered from one game to
+// the next on this browser, and a broken or missing setting gives the
 // defaults: sound off until you turn it on.
 
 import { clamp } from '../core/math';

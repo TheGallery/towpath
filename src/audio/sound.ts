@@ -1,12 +1,12 @@
 // The game's sound, all through one AudioContext. Browsers only let a page
 // make sound once you've clicked or pressed a key in it, so it wakes on your
 // first touch and stays quiet until then. The bell rings at its own level,
-// with its own switch. The other sounds are off until you turn them on, and
-// play through a mix: the boat and its locks, and nature, each with its own
-// switch, under a master volume and a compressor. The steady sounds dip under
-// a one-off sound, and further under the bell. When sound is off or the tab
-// is hidden, they fade out and stop, so only the bell rings in a background
-// tab.
+// with its own switch. The other sounds are off until you turn them on, a
+// choice remembered on this browser, and play through a mix: the boat and its
+// locks, and nature, each with its own switch, under a master volume and a
+// compressor. The steady sounds dip under a one-off sound, and further under
+// the bell. When sound is off or the tab is hidden, they fade out and stop, so
+// only the bell rings in a background tab.
 
 import type { DayEvent } from '../sim/day';
 import { ringBell } from './bell';
