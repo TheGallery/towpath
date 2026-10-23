@@ -3,6 +3,7 @@
 // keyboard: Space does the next thing and, held, winds or pushes; the arrow
 // keys wind either way. It closes by itself when the job is done.
 
+import type { Hands } from '../audio/cues';
 import { wrapAngle } from '../core/math';
 import type { Point } from '../core/track';
 import { GATE_LAYOUT, GateCloseup, PADDLE_LAYOUT, PaddleCloseup } from '../render/closeups';
@@ -100,6 +101,8 @@ export class Closeup {
   private doneFor = 0;
   private time = 0;
   private note: { text: string; until: number } | null = null;
+  /** Holding the windlass, or leaning on the beam, at the last step: for the sound. */
+  private holding = false;
 
   constructor(
     private readonly root: HTMLElement,
@@ -117,6 +120,17 @@ export class Closeup {
 
   get isOpen(): boolean {
     return this.job !== null;
+  }
+
+  /** Your hands at the part you're working, for the sound, or null with no close-up open. */
+  get hands(): Hands | null {
+    const { job, work } = this;
+    if (!job || !work) return null;
+    if (work.kind === 'paddle') {
+      const { hand } = work;
+      return { kind: 'paddle', fitted: hand.fitted, catchOn: hand.catchOn, angle: hand.angle, open: job.lock[hand.part], holding: this.holding };
+    }
+    return { kind: 'gate', spin: work.hand.spin, open: job.lock[work.hand.part], held: work.held, pushing: this.holding };
   }
 
   open(job: CloseupJob): void {
@@ -167,10 +181,12 @@ export class Closeup {
       const { hand } = work;
       if (keys.work) this.say(holdPaddle(hand, job.lock, dt));
       else if (keys.turn) this.say(windWindlass(hand, job.lock, keys.turn * KEY_WIND * dt));
-      this.say(settlePaddle(hand, job.lock, dt, work.winding !== null || keys.work || keys.turn !== 0));
+      this.holding = work.winding !== null || keys.work || keys.turn !== 0;
+      this.say(settlePaddle(hand, job.lock, dt, this.holding));
       done = paddleDone(hand, job.lock) || (!hand.fitted && !job.wanted());
     } else {
       const push: BeamPush = work.drag ? { kind: 'drag', angle: wrapAngle(Math.atan2(work.drag.at[1] - GATE_LAYOUT.hinge[1], work.drag.at[0] - GATE_LAYOUT.hinge[0]) + Math.PI) } : keys.work || keys.turn ? { kind: 'lean' } : null;
+      this.holding = push !== null;
       work.held = swingBeam(work.hand, job.lock, dt, push, job.boats());
       if (push) this.say(work.held);
       done = gateDone(work.hand, job.lock) || !job.wanted();

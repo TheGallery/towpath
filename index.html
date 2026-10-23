@@ -16,6 +16,16 @@
         </section>
         <div class="hud-actions">
           <span class="rate" id="rate" hidden></span>
+          <div class="sound-control">
+            <button type="button" class="map-button sound-button" id="sound-button" aria-expanded="false" aria-controls="sound-panel" data-on="false" title="The boat, the lock and the water"><span aria-hidden="true">🔊</span><span class="sound-text" id="sound-text">Sound off</span></button>
+            <section class="panel sound-panel" id="sound-panel" aria-label="Sound" hidden>
+              <label class="sound-row"><input type="checkbox" id="sound-on" /> Sound</label>
+              <label class="sound-row sound-volume">Volume <input type="range" id="sound-volume" min="0" max="1" step="0.05" /></label>
+              <label class="sound-row"><input type="checkbox" id="sound-boat" /> The boat and the locks</label>
+              <label class="sound-row"><input type="checkbox" id="sound-nature" /> Nature: the water at the hull</label>
+              <p class="sound-note">The bell has its own button, and rings with the sound off.</p>
+            </section>
+          </div>
           <button type="button" class="map-button bell-button" id="bell-button" aria-pressed="true" aria-label="Bell" title="The bell rings when the boat needs you"><span aria-hidden="true">🔔</span><span class="bell-text" id="bell-text">Bell on</span></button>
           <button type="button" class="map-button logbook-button" id="logbook-button" aria-keyshortcuts="L" hidden><span>Logbook</span> <kbd>L</kbd></button>
           <button type="button" class="map-button" id="map-button" aria-pressed="false" aria-keyshortcuts="M">
@@ -86,7 +96,10 @@
             <li><span><kbd>M</kbd></span> Open the map, and press it again to come back.</li>
             <li><span><kbd>L</kbd></span> Read the logbook: each day is written up in the evening.</li>
           </ul>
-          <button type="button" class="primary" id="cast-off">Cast off</button>
+          <div class="card-buttons">
+            <button type="button" class="primary" id="cast-off">Cast off</button>
+            <button type="button" class="secondary sound-switch" id="start-sound" aria-pressed="false" aria-label="Sound" title="The boat, the lock and the water. The bell has its own switch.">Sound off</button>
+          </div>
           <form class="new-canal" id="start-new-canal">
             <button type="submit" class="secondary">Start a new canal</button>
             <label>Canal no. <input type="text" name="canal" inputmode="numeric" autocomplete="off" maxlength="10" placeholder="any" /></label>

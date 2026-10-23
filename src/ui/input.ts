@@ -26,8 +26,8 @@ export class Keyboard {
   constructor(target: Window, onCommand: (command: Command) => void) {
     target.addEventListener('keydown', (ev) => {
       if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
-      // Typing a canal number, every key but Escape is the field's.
-      if (ev.target instanceof HTMLInputElement && ev.target.type === 'text' && ev.key !== 'Escape') return;
+      // Typing a canal number, or setting the volume, every key but Escape is the field's.
+      if (ev.target instanceof HTMLInputElement && (ev.target.type === 'text' || ev.target.type === 'range') && ev.key !== 'Escape') return;
       // M and L are letter shortcuts, so they follow the letter wherever the layout puts it.
       if (ev.key === 'm' || ev.key === 'M') {
         if (!ev.repeat) onCommand('toggle-map');
