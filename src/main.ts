@@ -1,4 +1,8 @@
 import './style.css';
+import { LOCK_FAR } from './audio/cues';
+import type { NearLock } from './audio/cues';
+import { SOUND_KEY, readSoundSettings, writeSoundSettings } from './audio/settings';
+import { Sound } from './audio/sound';
 import { FixedStepClock } from './core/clock';
 import { clamp } from './core/math';
 import { paintScenery } from './render/scenery';
@@ -20,13 +24,13 @@ import { planWalkers } from './sim/walkers';
 import { planWeather, weatherAt } from './sim/weather';
 import type { Weather, WeatherName } from './sim/weather';
 import { GAME_TITLE, tabTitle } from './title';
-import { Bell } from './ui/bell';
 import { Closeup } from './ui/closeup';
 import { Hud } from './ui/hud';
 import type { Choice } from './ui/hud';
 import { Keyboard } from './ui/input';
 import { LogbookView } from './ui/logbook';
 import type { LogbookPage } from './ui/logbook';
+import { SoundControls } from './ui/sound-controls';
 import { FollowCamera } from './view/camera';
 import type { View } from './view/camera';
 import { milesPerHour } from './world/dimensions';
@@ -64,9 +68,9 @@ const KEPT_KEY = 'towpath:place';
 const KEEP_EVERY = 5000;
 
 /** Browser storage can be switched off or full, and the game carries on without it. */
-function readKept(): string | null {
+function readStored(key: string): string | null {
   try {
-    return window.localStorage.getItem(KEPT_KEY);
+    return window.localStorage.getItem(key);
   } catch {
     return null;
   }
@@ -77,7 +81,7 @@ const canalFor = (number: number): Canal => ({ number, data: makeCanal(number).d
 
 const askedSeed = readSeed(window.location.search);
 // `?fresh` sets your kept place aside and starts a new game.
-const loaded = new URLSearchParams(window.location.search).has('fresh') ? null : loadGame(readKept());
+const loaded = new URLSearchParams(window.location.search).has('fresh') ? null : loadGame(readStored(KEPT_KEY));
 // `?seed=N` opens canal no. N as a new game, unless your game is on it already.
 const kept = loaded && (askedSeed === null || loaded.canal.number === askedSeed) ? loaded : null;
 // Every new game is on a new canal, from a random number unless one is asked for.
@@ -98,8 +102,8 @@ let weather: Weather = planWeather(canal.data.seed, day.number, askedWeather);
 const rate = readRate(window.location.search);
 const clock = new FixedStepClock(STEP, MAX_CATCH_UP);
 const camera = new FollowCamera(stretch.data.size);
-const bell = new Bell(window);
-bell.on = kept?.bell ?? true;
+const sound = new Sound(window, readSoundSettings(readStored(SOUND_KEY)));
+sound.bellOn = kept?.bell ?? true;
 
 let keptAt = 0;
 /** True once you've started a new canal and the page is going, so this game is no longer the one kept. */
@@ -109,7 +113,7 @@ function keepPlace(): void {
   keptAt = performance.now();
   if (leaving) return;
   try {
-    window.localStorage.setItem(KEPT_KEY, saveGame({ canal, day, pages, other: otherWay, bell: bell.on }));
+    window.localStorage.setItem(KEPT_KEY, saveGame({ canal, day, pages, other: otherWay, bell: sound.bellOn }));
   } catch {
     // No storage: the day goes on, but won't be kept.
   }
@@ -144,7 +148,7 @@ function reopen(next: Kept): boolean {
 function startCanal(number: number): void {
   const next = canalFor(number);
   const other = askedWay ?? (Math.random() < 0.5 ? 'down' : 'up');
-  if (reopen({ canal: next, day: newDay(planDay(resolveStretch(next.data)), { other }), pages: [], other, bell: bell.on })) return;
+  if (reopen({ canal: next, day: newDay(planDay(resolveStretch(next.data)), { other }), pages: [], other, bell: sound.bellOn })) return;
   const address = plainAddress();
   address.searchParams.set('seed', String(number));
   leaving = true;
@@ -161,7 +165,7 @@ function startCanal(number: number): void {
  */
 function carryOn(): void {
   otherWay = askedWay ?? (otherWay === 'down' ? 'up' : 'down');
-  if (reopen(nextMorning({ canal, day, pages, other: otherWay, bell: bell.on }, stretch, otherWay))) return;
+  if (reopen(nextMorning({ canal, day, pages, other: otherWay, bell: sound.bellOn }, stretch, otherWay))) return;
   pages = [...pages, dayPage(canal, day)];
   day = newDay(dayPlan, { other: otherWay, number: day.number + 1 });
   weather = planWeather(canal.data.seed, day.number, askedWeather);
@@ -300,7 +304,8 @@ function logbookPage(page: DayPage): LogbookPage {
 }
 
 function back(): void {
-  if (logbook.isOpen) logbook.close();
+  if (soundControls.isOpen) soundControls.close();
+  else if (logbook.isOpen) logbook.close();
   else if (closeup.isOpen) closeup.close();
   else if (askingSpot) askingSpot = false;
   else camera.setMap(false);
@@ -321,12 +326,20 @@ const hud = new Hud(document, {
   onToggleMap: () => toggleMap(),
   onCall: () => answerCall(),
   onBell: (on) => {
-    bell.on = on;
+    sound.bellOn = on;
     keepPlace();
   },
   onLogbook: () => toggleLogbook(),
 });
-hud.setBell(bell.on);
+hud.setBell(sound.bellOn);
+const soundControls = new SoundControls(document, sound.current, (settings) => {
+  sound.configure(settings);
+  try {
+    window.localStorage.setItem(SOUND_KEY, writeSoundSettings(settings));
+  } catch {
+    // No storage: the sound stays as you set it until the tab closes.
+  }
+});
 const keyboard = new Keyboard(window, (command) => {
   // While the logbook is open, the keys only close it.
   if (logbook.isOpen && command !== 'back' && command !== 'logbook') return;
@@ -347,6 +360,7 @@ const lockName = (id: string): string => day.plan.locks.find((l) => l.id === id)
 const inSentence = (name: string): string => name.charAt(0).toLowerCase() + name.slice(1);
 
 function handle(events: readonly DayEvent[]): void {
+  sound.hear(events);
   let ring = false;
   for (const e of events) {
     if (e.kind === 'call') {
@@ -380,7 +394,7 @@ function handle(events: readonly DayEvent[]): void {
     else if (e.kind === 'bump') hud.toast(e.what === 'bank' ? 'Bump! Boats nudge the bank all the time. No harm done.' : 'Bump! A gentle knock on a moored boat. Pass them slowly, and keep to the far side.');
   }
   // However many calls a hidden tab catches up on at once, the bell rings once.
-  if (ring) bell.ring();
+  if (ring) sound.ring();
   const open = day.calls.open;
   const title = tabTitle(open ? callTitle(open.kind, day, dayPlan) : null);
   if (document.title !== title) document.title = title;
@@ -411,6 +425,19 @@ function simulate(now: number): void {
   }
 }
 
+/** The lock nearest the boat along its route, for the sound, if there's one near enough to hear. */
+function nearLock(): NearLock | null {
+  const { trip } = day;
+  let near: NearLock | null = null;
+  for (const l of day.plan.locks) {
+    const state = trip.locks.get(l.id);
+    const distance = Math.abs(trip.boat.s - l.s);
+    if (!state || distance > LOCK_FAR || (near && near.distance <= distance)) continue;
+    near = { id: l.id, distance, flowIn: state.flowIn, flowOut: state.flowOut, bottomGates: state.bottomGates, topGates: state.topGates };
+  }
+  return near;
+}
+
 let lastFrame: number | null = null;
 function frame(now: number): void {
   simulate(now);
@@ -427,6 +454,7 @@ function frame(now: number): void {
   const focus: Focus | null = yours?.next ? { lock: yours.lock.id, part: yours.next.part, glow: yours.job.kind !== 'wait-water' && yours.job.kind !== 'boat-in' } : null;
   scene.render({ time: day.time, homeFrom: eveningBegan(day), trip, boat: pose, along: trip.boat.s, focus, light: lightAt(day), spots: day.phase === 'dusk' ? day.plan.spots : null, route: day.plan.route, weather, weatherNow: weatherAt(day, weather) }, view, viewport.width);
   closeup.render(dt);
+  sound.update({ world: { phase: day.phase, trip: trip.phase, speed: trip.boat.v, lock: nearLock() }, hands: closeup.hands, mapOpen: camera.mapOpen, closeupOpen: closeup.isOpen }, dt);
 
   const need = needsYou(day, dayPlan);
   const call = need === 'way' && fork ? `Choose a way at ${fork.name}` : need === 'spot' ? 'Choose where to moor' : focus ? `Go to the ${PART_NAMES[focus.part]}` : null;
@@ -462,6 +490,8 @@ if (kept && day.phase !== 'morning') {
 let hiddenTimer = 0;
 document.addEventListener('visibilitychange', () => {
   window.clearInterval(hiddenTimer);
+  // Only the bell rings in a background tab.
+  sound.setHidden(document.hidden);
   if (document.hidden) {
     keepPlace();
     hiddenTimer = window.setInterval(() => simulate(performance.now()), 1000);
